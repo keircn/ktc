@@ -152,6 +152,8 @@ fn run_standalone() {
     use std::fs::OpenOptions;
     use input::{InputHandler, InputAction};
     
+    let tty_guard = setup_tty();
+    
     let (mut display, socket) = setup_wayland();
     
     let socket_name = socket.socket_name()
@@ -546,4 +548,70 @@ fn setup_drm(device: &std::fs::File) -> Result<DrmInfo, Box<dyn std::error::Erro
         fb_id: fb_handle.into(),
         _crtc: crtc_handle,
     })
+}
+
+struct TtyGuard {
+    fd: std::os::fd::RawFd,
+    old_mode: i32,
+}
+
+impl Drop for TtyGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::ioctl(self.fd, 0x4B3A, self.old_mode);
+            libc::close(self.fd);
+        }
+        log::info!("TTY restored to text mode");
+    }
+}
+
+fn setup_tty() -> Option<TtyGuard> {
+    use std::os::fd::AsRawFd;
+    
+    let tty_path = std::fs::read_to_string("/sys/class/tty/tty0/active")
+        .ok()
+        .and_then(|s| {
+            let tty_name = s.trim();
+            if !tty_name.is_empty() {
+                Some(format!("/dev/{}", tty_name))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "/dev/tty".to_string());
+    
+    log::info!("Attempting to open TTY: {}", tty_path);
+    
+    let tty = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&tty_path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("Failed to open TTY {}: {}", tty_path, e);
+            return None;
+        }
+    };
+    
+    let fd = tty.as_raw_fd();
+    
+    unsafe {
+        let mut old_mode: i32 = 0;
+        if libc::ioctl(fd, 0x4B3B, &mut old_mode as *mut i32) < 0 {
+            log::warn!("Failed to get TTY mode (KDGETMODE)");
+            return None;
+        }
+        
+        const KD_GRAPHICS: i32 = 0x01;
+        if libc::ioctl(fd, 0x4B3A, KD_GRAPHICS) < 0 {
+            log::warn!("Failed to set TTY to graphics mode (KDSETMODE)");
+            return None;
+        }
+        
+        log::info!("TTY switched to graphics mode (old_mode={})", old_mode);
+        
+        std::mem::forget(tty);
+        
+        Some(TtyGuard { fd, old_mode })
+    }
 }
