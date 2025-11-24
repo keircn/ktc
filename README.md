@@ -1,4 +1,4 @@
-# KTC - Minimal Wayland Compositor
+# KTC - Keiran's Tiling Compositor
 
 A minimal, from-scratch Wayland compositor written in Rust. Built for learning and experimentation.
 
