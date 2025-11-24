@@ -10,7 +10,11 @@ use wayland_server::protocol::{
     wl_data_device_manager::WlDataDeviceManager,
 };
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
+use winit::event_loop::{EventLoop, ControlFlow};
+use winit::event::{Event, WindowEvent};
+use winit::window::Window;
 use std::sync::Arc;
+use std::rc::Rc;
 
 use state::State;
 
@@ -30,13 +34,23 @@ fn main() {
     
     println!("Listening on: {}", socket.socket_name().unwrap().to_string_lossy());
 
-    let mut event_loop = calloop::EventLoop::<LoopState>::try_new()
-        .expect("Failed to create event loop");
+    let winit_loop = EventLoop::new().expect("Failed to create winit event loop");
+    
+    let window_attrs = Window::default_attributes()
+        .with_title("KTC Compositor")
+        .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
+    let window = Rc::new(winit_loop.create_window(window_attrs).expect("Failed to create window"));
+
+    let context = softbuffer::Context::new(window.clone()).expect("Failed to create softbuffer context");
+    let mut surface = softbuffer::Surface::new(&context, window.clone()).expect("Failed to create surface");
+
+    let mut calloop_loop = calloop::EventLoop::<LoopData>::try_new()
+        .expect("Failed to create calloop event loop");
 
     let poll_fd = display.backend().poll_fd().try_clone_to_owned()
         .expect("Failed to clone poll fd");
     
-    event_loop
+    calloop_loop
         .handle()
         .insert_source(
             calloop::generic::Generic::new(
@@ -44,9 +58,9 @@ fn main() {
                 calloop::Interest::READ,
                 calloop::Mode::Level,
             ),
-            |_, socket, state| {
+            |_, socket, data| {
                 if let Some(stream) = socket.accept().ok().flatten() {
-                    state.display.handle().insert_client(stream, Arc::new(()))
+                    data.display.handle().insert_client(stream, Arc::new(()))
                         .expect("Failed to insert client");
                 }
                 Ok(calloop::PostAction::Continue)
@@ -54,7 +68,7 @@ fn main() {
         )
         .expect("Failed to insert socket source");
 
-    event_loop
+    calloop_loop
         .handle()
         .insert_source(
             calloop::generic::Generic::new(
@@ -62,21 +76,54 @@ fn main() {
                 calloop::Interest::READ,
                 calloop::Mode::Level,
             ),
-            |_, _, state| {
-                state.display.dispatch_clients(&mut State::new()).ok();
-                state.display.flush_clients().ok();
+            |_, _, data| {
+                data.display.dispatch_clients(&mut data.state).ok();
+                data.display.flush_clients().ok();
                 Ok(calloop::PostAction::Continue)
             },
         )
         .expect("Failed to insert display source");
 
-    let mut state = LoopState { display };
-    
-    event_loop
-        .run(None, &mut state, |_| {})
-        .expect("Event loop failed");
+    let mut loop_data = LoopData { 
+        display,
+        state: State::new(),
+    };
+
+    winit_loop.run(move |event, target| {
+        target.set_control_flow(ControlFlow::Poll);
+        
+        calloop_loop.dispatch(Some(std::time::Duration::from_millis(1)), &mut loop_data).ok();
+
+        match event {
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                target.exit();
+            }
+            Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
+                let (width, height) = {
+                    let size = window.inner_size();
+                    (size.width as usize, size.height as usize)
+                };
+                
+                surface.resize(
+                    std::num::NonZeroU32::new(width as u32).unwrap(),
+                    std::num::NonZeroU32::new(height as u32).unwrap(),
+                ).ok();
+
+                let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
+                for pixel in buffer.iter_mut() {
+                    *pixel = 0xFF202020;
+                }
+                buffer.present().ok();
+            }
+            Event::AboutToWait => {
+                window.request_redraw();
+            }
+            _ => {}
+        }
+    }).expect("Event loop error");
 }
 
-struct LoopState {
+struct LoopData {
     display: Display<State>,
+    state: State,
 }
