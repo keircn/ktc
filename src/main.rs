@@ -3,6 +3,9 @@ use wayland_server::protocol::{
     wl_compositor::{self, WlCompositor},
     wl_surface::{self, WlSurface},
     wl_seat::{self, WlSeat},
+    wl_pointer::{self, WlPointer},
+    wl_keyboard::{self, WlKeyboard},
+    wl_touch::{self, WlTouch},
     wl_output::{self, WlOutput},
     wl_shm::{self, WlShm},
     wl_shm_pool::{self, WlShmPool},
@@ -179,7 +182,56 @@ impl wayland_server::Dispatch<WlSeat, ()> for State {
         _state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &WlSeat,
-        _request: wl_seat::Request,
+        request: wl_seat::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            wl_seat::Request::GetPointer { id } => {
+                data_init.init(id, ());
+            }
+            wl_seat::Request::GetKeyboard { id } => {
+                data_init.init(id, ());
+            }
+            wl_seat::Request::GetTouch { id } => {
+                data_init.init(id, ());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl wayland_server::Dispatch<WlPointer, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlPointer,
+        _request: wl_pointer::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {}
+}
+
+impl wayland_server::Dispatch<WlKeyboard, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlKeyboard,
+        _request: wl_keyboard::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {}
+}
+
+impl wayland_server::Dispatch<WlTouch, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlTouch,
+        _request: wl_touch::Request,
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
