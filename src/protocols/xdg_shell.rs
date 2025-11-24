@@ -33,11 +33,11 @@ impl Dispatch<XdgWmBase, ()> for State {
     ) {
         match request {
             xdg_wm_base::Request::CreatePositioner { id } => {
-                eprintln!("[xdg_wm_base] CreatePositioner");
+                log::info!("[xdg_wm_base] CreatePositioner");
                 data_init.init(id, ());
             }
-            xdg_wm_base::Request::GetXdgSurface { id, .. } => {
-                eprintln!("[xdg_wm_base] GetXdgSurface");
+            xdg_wm_base::Request::GetXdgSurface { id, surface: _ } => {
+                log::info!("[xdg_wm_base] GetXdgSurface");
                 data_init.init(id, ());
             }
             _ => {}
@@ -69,17 +69,18 @@ impl Dispatch<XdgSurface, ()> for State {
     ) {
         match request {
             xdg_surface::Request::GetToplevel { id } => {
-                eprintln!("[xdg_surface] GetToplevel");
+                log::info!("[xdg_surface] GetToplevel");
                 let toplevel = data_init.init(id, ());
+                log::info!("[xdg_surface] Sending configure events");
                 resource.configure(1);
                 toplevel.configure(0, 0, vec![]);
             }
             xdg_surface::Request::GetPopup { id, .. } => {
-                eprintln!("[xdg_surface] GetPopup");
+                log::info!("[xdg_surface] GetPopup");
                 data_init.init(id, ());
             }
-            xdg_surface::Request::AckConfigure { .. } => {
-                eprintln!("[xdg_surface] AckConfigure");
+            xdg_surface::Request::AckConfigure { serial } => {
+                log::info!("[xdg_surface] AckConfigure: serial={}", serial);
             }
             _ => {}
         }

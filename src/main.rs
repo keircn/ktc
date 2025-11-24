@@ -90,8 +90,15 @@ fn run_nested() {
             ),
             |_, socket, data| {
                 if let Some(stream) = socket.accept().ok().flatten() {
-                    data.display.handle().insert_client(stream, Arc::new(()))
-                        .expect("Failed to insert client");
+                    log::info!("New client connecting to Wayland socket");
+                    match data.display.handle().insert_client(stream, Arc::new(())) {
+                        Ok(client_id) => {
+                            log::info!("Client connected successfully: {:?}", client_id);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to insert client: {}", e);
+                        }
+                    }
                 }
                 Ok(calloop::PostAction::Continue)
             },
@@ -209,8 +216,15 @@ fn run_standalone() {
             ),
             |_, socket, data| {
                 if let Some(stream) = socket.accept().ok().flatten() {
-                    data.display.handle().insert_client(stream, Arc::new(()))
-                        .expect("Failed to insert client");
+                    log::info!("New client connecting to Wayland socket");
+                    match data.display.handle().insert_client(stream, Arc::new(())) {
+                        Ok(client_id) => {
+                            log::info!("Client connected successfully: {:?}", client_id);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to insert client: {}", e);
+                        }
+                    }
                 }
                 Ok(calloop::PostAction::Continue)
             },
