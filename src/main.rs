@@ -43,6 +43,14 @@ fn main() {
     
     match cli.command {
         Some(Commands::Start { nested, standalone }) => {
+            if unsafe { libc::geteuid() } == 0 {
+                eprintln!("Error: KTC must not be run as root");
+                eprintln!("Add your user to the 'video' and 'input' groups instead:");
+                eprintln!("  sudo usermod -aG video,input $USER");
+                eprintln!("Then log out and back in.");
+                std::process::exit(1);
+            }
+            
             logging::FileLogger::init().expect("Failed to initialize logging");
             
             if nested && standalone {
@@ -91,7 +99,12 @@ fn print_help() {
     println!("EXAMPLES:");
     println!("    ktc start             Auto-detect mode and start compositor");
     println!("    ktc start --nested    Start in nested mode for testing");
-    println!("    sudo ktc start        Start from TTY as native compositor");
+    println!("    ktc start             Start from TTY as native compositor (DO NOT use sudo)");
+    println!();
+    println!("SETUP (for standalone mode from TTY):");
+    println!("    sudo usermod -aG video $USER");
+    println!("    sudo usermod -aG input $USER");
+    println!("    Log out and back in for group changes to take effect");
     println!();
     println!("KEYBINDS:");
     println!("    Ctrl+Alt+Q           Exit compositor");
@@ -237,8 +250,6 @@ fn run_standalone() {
                 Err(e) => {
                     log::error!("Failed to setup DRM: {}", e);
                     log::warn!("Running in headless mode");
-                    log::info!("Tip: Make sure you're in the 'video' group or running as root");
-                    log::info!("     Or run under an existing compositor for nested mode");
                     None
                 }
             }
@@ -246,7 +257,7 @@ fn run_standalone() {
         Err(e) => {
             log::error!("Failed to open DRM device: {}", e);
             log::warn!("Running in headless mode (no display output)");
-            log::info!("To see client windows, run this compositor in nested mode instead.");
+            log::info!("Make sure you're in the 'video' group: sudo usermod -aG video $USER");
             None
         }
     };
@@ -259,6 +270,7 @@ fn run_standalone() {
         Err(e) => {
             log::error!("Failed to initialize input handler: {}", e);
             log::warn!("Input will not be available");
+            log::info!("Make sure you're in the 'input' group: sudo usermod -aG input $USER");
             None
         }
     };
