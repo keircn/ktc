@@ -7,6 +7,10 @@ use wayland_server::protocol::{
     wl_shm::{self, WlShm},
     wl_shm_pool::{self, WlShmPool},
     wl_buffer::{self, WlBuffer},
+    wl_data_device_manager::{self, WlDataDeviceManager},
+    wl_data_device::{self, WlDataDevice},
+    wl_data_source::{self, WlDataSource},
+    wl_data_offer::{self, WlDataOffer},
 };
 use wayland_protocols::xdg::shell::server::{
     xdg_wm_base::{self, XdgWmBase},
@@ -278,6 +282,77 @@ impl wayland_server::Dispatch<WlBuffer, ()> for State {
     ) {}
 }
 
+impl GlobalDispatch<WlDataDeviceManager, ()> for State {
+    fn bind(
+        _state: &mut Self,
+        _handle: &wayland_server::DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: wayland_server::New<WlDataDeviceManager>,
+        _global_data: &(),
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl wayland_server::Dispatch<WlDataDeviceManager, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlDataDeviceManager,
+        request: wl_data_device_manager::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            wl_data_device_manager::Request::CreateDataSource { id } => {
+                data_init.init(id, ());
+            }
+            wl_data_device_manager::Request::GetDataDevice { id, .. } => {
+                data_init.init(id, ());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl wayland_server::Dispatch<WlDataDevice, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlDataDevice,
+        _request: wl_data_device::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {}
+}
+
+impl wayland_server::Dispatch<WlDataSource, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlDataSource,
+        _request: wl_data_source::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {}
+}
+
+impl wayland_server::Dispatch<WlDataOffer, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlDataOffer,
+        _request: wl_data_offer::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {}
+}
+
 fn main() {
     let mut display = Display::<State>::new().expect("Failed to create display");
     let dh = display.handle();
@@ -287,6 +362,7 @@ fn main() {
     dh.create_global::<State, WlSeat, _>(7, ());
     dh.create_global::<State, WlOutput, _>(4, ());
     dh.create_global::<State, WlShm, _>(1, ());
+    dh.create_global::<State, WlDataDeviceManager, _>(3, ());
 
     let socket = ListeningSocket::bind_auto("wayland", 0..32)
         .expect("Failed to create socket");
