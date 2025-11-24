@@ -129,7 +129,68 @@ fn run_nested() {
 }
 
 fn run_standalone() {
+    use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd;
+    use nix::sys::mman::{mmap, MapFlags, ProtFlags};
+    
     let (mut display, socket) = setup_wayland();
+
+    let fb_path = if std::path::Path::new("/dev/fb0").exists() {
+        "/dev/fb0"
+    } else {
+        eprintln!("No framebuffer device found at /dev/fb0");
+        eprintln!("Running in headless mode (no display output)");
+        eprintln!("To see client windows, run this compositor in nested mode instead.");
+        ""
+    };
+
+    let fb_info = if !fb_path.is_empty() {
+        match OpenOptions::new().read(true).write(true).open(fb_path) {
+            Ok(fb_file) => {
+                let fd = fb_file.as_raw_fd();
+                match get_fb_info(fd) {
+                    Ok((width, height, line_length, bpp)) => {
+                        eprintln!("Framebuffer: {}x{} @ {}bpp", width, height, bpp);
+                        let size = (line_length * height) as usize;
+                        
+                        let fb_ptr = unsafe {
+                            mmap(
+                                None,
+                                size.try_into().unwrap(),
+                                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                                MapFlags::MAP_SHARED,
+                                fd,
+                                0,
+                            ).ok()
+                        };
+                        
+                        if let Some(ptr) = fb_ptr {
+                            Some(FramebufferInfo {
+                                ptr: ptr as *mut u32,
+                                width: width as usize,
+                                height: height as usize,
+                                line_length: line_length as usize,
+                                _file: fb_file,
+                            })
+                        } else {
+                            eprintln!("Failed to mmap framebuffer, running headless");
+                            None
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to get framebuffer info: {}, running headless", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to open framebuffer: {}, running headless", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let mut calloop_loop = calloop::EventLoop::<StandaloneLoopData>::try_new()
         .expect("Failed to create calloop event loop");
@@ -171,11 +232,11 @@ fn run_standalone() {
         )
         .expect("Failed to insert display source");
 
-    let timer = calloop_loop.handle()
+    let _timer = calloop_loop.handle()
         .insert_source(
             calloop::timer::Timer::immediate(),
             |_deadline, _: &mut (), data| {
-                render_standalone(&mut data.state, &mut data.display);
+                render_standalone(&mut data.state, &mut data.display, data.fb_info.as_ref());
                 calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(16))
             },
         )
@@ -184,6 +245,7 @@ fn run_standalone() {
     let mut loop_data = StandaloneLoopData {
         display,
         state: State::new(),
+        fb_info,
     };
 
     println!("Compositor running in standalone mode. Press Ctrl+C to exit.");
@@ -257,7 +319,38 @@ fn render_frame(
     loop_data.display.flush_clients().ok();
 }
 
-fn render_standalone(state: &mut State, display: &mut Display<State>) {
+fn render_standalone(state: &mut State, display: &mut Display<State>, fb_info: Option<&FramebufferInfo>) {
+    if let Some(fb) = fb_info {
+        unsafe {
+            let pixels = std::slice::from_raw_parts_mut(fb.ptr, fb.width * fb.height);
+            
+            for pixel in pixels.iter_mut() {
+                *pixel = 0xFF202020;
+            }
+            
+            for (_id, surface_data) in &state.surfaces {
+                if let Some(ref wl_buffer) = surface_data.buffer {
+                    if let Some(client_pixels) = state.get_buffer_pixels(wl_buffer) {
+                        if let Some(buffer_data) = state.buffers.get(&wl_buffer.id().protocol_id()) {
+                            let buf_width = buffer_data.width as usize;
+                            let buf_height = buffer_data.height as usize;
+                            
+                            for y in 0..buf_height.min(fb.height) {
+                                for x in 0..buf_width.min(fb.width) {
+                                    let src_idx = y * buf_width + x;
+                                    let dst_idx = y * fb.width + x;
+                                    if src_idx < client_pixels.len() && dst_idx < pixels.len() {
+                                        pixels[dst_idx] = client_pixels[src_idx];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     let mut buffers_to_release = Vec::new();
     
     for (_id, surface_data) in &state.surfaces {
@@ -290,4 +383,68 @@ struct NestedLoopData {
 struct StandaloneLoopData {
     display: Display<State>,
     state: State,
+    fb_info: Option<FramebufferInfo>,
+}
+
+struct FramebufferInfo {
+    ptr: *mut u32,
+    width: usize,
+    height: usize,
+    line_length: usize,
+    _file: std::fs::File,
+}
+
+unsafe impl Send for FramebufferInfo {}
+
+fn get_fb_info(fd: std::os::fd::RawFd) -> Result<(u32, u32, u32, u32), String> {
+    use std::mem::MaybeUninit;
+    
+    #[repr(C)]
+    struct FbVarScreeninfo {
+        xres: u32,
+        yres: u32,
+        xres_virtual: u32,
+        yres_virtual: u32,
+        xoffset: u32,
+        yoffset: u32,
+        bits_per_pixel: u32,
+        grayscale: u32,
+        _padding: [u8; 160],
+    }
+    
+    #[repr(C)]
+    struct FbFixScreeninfo {
+        id: [u8; 16],
+        smem_start: usize,
+        smem_len: u32,
+        type_: u32,
+        type_aux: u32,
+        visual: u32,
+        xpanstep: u16,
+        ypanstep: u16,
+        ywrapstep: u16,
+        line_length: u32,
+        _padding: [u8; 216],
+    }
+    
+    const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
+    const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
+    
+    unsafe {
+        let mut vinfo = MaybeUninit::<FbVarScreeninfo>::zeroed();
+        let mut finfo = MaybeUninit::<FbFixScreeninfo>::zeroed();
+        
+        if libc::ioctl(fd, FBIOGET_VSCREENINFO, vinfo.as_mut_ptr()) < 0 {
+            return Err("Failed to get variable screen info".to_string());
+        }
+        
+        if libc::ioctl(fd, FBIOGET_FSCREENINFO, finfo.as_mut_ptr()) < 0 {
+            return Err("Failed to get fixed screen info".to_string());
+        }
+        
+        let vinfo = vinfo.assume_init();
+        let finfo = finfo.assume_init();
+        
+        Ok((vinfo.xres, vinfo.yres, finfo.line_length / 4, vinfo.bits_per_pixel))
+    }
 }
