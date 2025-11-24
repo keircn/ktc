@@ -10,16 +10,24 @@ use wayland_server::protocol::{
     wl_data_device_manager::WlDataDeviceManager,
 };
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
-use winit::event_loop::{EventLoop, ControlFlow};
-use winit::event::{Event, WindowEvent};
-use winit::window::Window;
 use std::sync::Arc;
-use std::rc::Rc;
 
 use state::State;
 
 fn main() {
-    let mut display = Display::<State>::new().expect("Failed to create display");
+    let is_nested = std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok();
+    
+    if is_nested {
+        println!("Running in nested mode (client of existing compositor)");
+        run_nested();
+    } else {
+        println!("Running in standalone mode (native compositor)");
+        run_standalone();
+    }
+}
+
+fn setup_wayland() -> (Display<State>, ListeningSocket) {
+    let display = Display::<State>::new().expect("Failed to create display");
     let dh = display.handle();
     
     dh.create_global::<State, WlCompositor, _>(6, ());
@@ -33,18 +41,29 @@ fn main() {
         .expect("Failed to create socket");
     
     println!("Listening on: {}", socket.socket_name().unwrap().to_string_lossy());
+    
+    (display, socket)
+}
+
+fn run_nested() {
+    use winit::event_loop::{EventLoop, ControlFlow};
+    use winit::event::{Event, WindowEvent};
+    use winit::window::Window;
+    use std::rc::Rc;
+
+    let (mut display, socket) = setup_wayland();
 
     let winit_loop = EventLoop::new().expect("Failed to create winit event loop");
     
     let window_attrs = Window::default_attributes()
-        .with_title("KTC Compositor")
+        .with_title("KTC Compositor (Nested)")
         .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
     let window = Rc::new(winit_loop.create_window(window_attrs).expect("Failed to create window"));
 
     let context = softbuffer::Context::new(window.clone()).expect("Failed to create softbuffer context");
     let mut surface = softbuffer::Surface::new(&context, window.clone()).expect("Failed to create surface");
 
-    let mut calloop_loop = calloop::EventLoop::<LoopData>::try_new()
+    let mut calloop_loop = calloop::EventLoop::<NestedLoopData>::try_new()
         .expect("Failed to create calloop event loop");
 
     let poll_fd = display.backend().poll_fd().try_clone_to_owned()
@@ -84,7 +103,7 @@ fn main() {
         )
         .expect("Failed to insert display source");
 
-    let mut loop_data = LoopData { 
+    let mut loop_data = NestedLoopData { 
         display,
         state: State::new(),
     };
@@ -99,63 +118,7 @@ fn main() {
                 target.exit();
             }
             Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                let (width, height) = {
-                    let size = window.inner_size();
-                    (size.width as usize, size.height as usize)
-                };
-                
-                surface.resize(
-                    std::num::NonZeroU32::new(width as u32).unwrap(),
-                    std::num::NonZeroU32::new(height as u32).unwrap(),
-                ).ok();
-
-                let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
-                
-                for pixel in buffer.iter_mut() {
-                    *pixel = 0xFF202020;
-                }
-                
-                let mut buffers_to_release = Vec::new();
-                
-                for (_id, surface_data) in &loop_data.state.surfaces {
-                    if let Some(ref wl_buffer) = surface_data.buffer {
-                        if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
-                            if let Some(buffer_data) = loop_data.state.buffers.get(&wl_buffer.id().protocol_id()) {
-                                let buf_width = buffer_data.width as usize;
-                                let buf_height = buffer_data.height as usize;
-                                
-                                for y in 0..buf_height.min(height) {
-                                    for x in 0..buf_width.min(width) {
-                                        let src_idx = y * buf_width + x;
-                                        let dst_idx = y * width + x;
-                                        if src_idx < pixels.len() && dst_idx < buffer.len() {
-                                            buffer[dst_idx] = pixels[src_idx];
-                                        }
-                                    }
-                                }
-                                
-                                buffers_to_release.push(wl_buffer.clone());
-                            }
-                        }
-                    }
-                }
-                
-                buffer.present().ok();
-                
-                for wl_buffer in buffers_to_release {
-                    wl_buffer.release();
-                }
-                
-                let time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u32;
-                    
-                for callback in loop_data.state.frame_callbacks.drain(..) {
-                    callback.done(time);
-                }
-                
-                loop_data.display.flush_clients().ok();
+                render_frame(&mut surface, &window, &mut loop_data);
             }
             Event::AboutToWait => {
                 window.request_redraw();
@@ -165,7 +128,166 @@ fn main() {
     }).expect("Event loop error");
 }
 
-struct LoopData {
+fn run_standalone() {
+    let (mut display, socket) = setup_wayland();
+
+    let mut calloop_loop = calloop::EventLoop::<StandaloneLoopData>::try_new()
+        .expect("Failed to create calloop event loop");
+
+    let poll_fd = display.backend().poll_fd().try_clone_to_owned()
+        .expect("Failed to clone poll fd");
+    
+    calloop_loop
+        .handle()
+        .insert_source(
+            calloop::generic::Generic::new(
+                &socket,
+                calloop::Interest::READ,
+                calloop::Mode::Level,
+            ),
+            |_, socket, data| {
+                if let Some(stream) = socket.accept().ok().flatten() {
+                    data.display.handle().insert_client(stream, Arc::new(()))
+                        .expect("Failed to insert client");
+                }
+                Ok(calloop::PostAction::Continue)
+            },
+        )
+        .expect("Failed to insert socket source");
+
+    calloop_loop
+        .handle()
+        .insert_source(
+            calloop::generic::Generic::new(
+                poll_fd,
+                calloop::Interest::READ,
+                calloop::Mode::Level,
+            ),
+            |_, _, data| {
+                data.display.dispatch_clients(&mut data.state).ok();
+                data.display.flush_clients().ok();
+                Ok(calloop::PostAction::Continue)
+            },
+        )
+        .expect("Failed to insert display source");
+
+    let timer = calloop_loop.handle()
+        .insert_source(
+            calloop::timer::Timer::immediate(),
+            |_deadline, _: &mut (), data| {
+                render_standalone(&mut data.state, &mut data.display);
+                calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(16))
+            },
+        )
+        .expect("Failed to insert timer");
+
+    let mut loop_data = StandaloneLoopData {
+        display,
+        state: State::new(),
+    };
+
+    println!("Compositor running in standalone mode. Press Ctrl+C to exit.");
+    
+    loop {
+        calloop_loop.dispatch(None, &mut loop_data).expect("Event loop error");
+    }
+}
+
+fn render_frame(
+    surface: &mut softbuffer::Surface<std::rc::Rc<winit::window::Window>, std::rc::Rc<winit::window::Window>>,
+    window: &winit::window::Window,
+    loop_data: &mut NestedLoopData
+) {
+    let (width, height) = {
+        let size = window.inner_size();
+        (size.width as usize, size.height as usize)
+    };
+    
+    surface.resize(
+        std::num::NonZeroU32::new(width as u32).unwrap(),
+        std::num::NonZeroU32::new(height as u32).unwrap(),
+    ).ok();
+
+    let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
+    
+    for pixel in buffer.iter_mut() {
+        *pixel = 0xFF202020;
+    }
+    
+    let mut buffers_to_release = Vec::new();
+    
+    for (_id, surface_data) in &loop_data.state.surfaces {
+        if let Some(ref wl_buffer) = surface_data.buffer {
+            if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
+                if let Some(buffer_data) = loop_data.state.buffers.get(&wl_buffer.id().protocol_id()) {
+                    let buf_width = buffer_data.width as usize;
+                    let buf_height = buffer_data.height as usize;
+                    
+                    for y in 0..buf_height.min(height) {
+                        for x in 0..buf_width.min(width) {
+                            let src_idx = y * buf_width + x;
+                            let dst_idx = y * width + x;
+                            if src_idx < pixels.len() && dst_idx < buffer.len() {
+                                buffer[dst_idx] = pixels[src_idx];
+                            }
+                        }
+                    }
+                    
+                    buffers_to_release.push(wl_buffer.clone());
+                }
+            }
+        }
+    }
+    
+    buffer.present().ok();
+    
+    for wl_buffer in buffers_to_release {
+        wl_buffer.release();
+    }
+    
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u32;
+        
+    for callback in loop_data.state.frame_callbacks.drain(..) {
+        callback.done(time);
+    }
+    
+    loop_data.display.flush_clients().ok();
+}
+
+fn render_standalone(state: &mut State, display: &mut Display<State>) {
+    let mut buffers_to_release = Vec::new();
+    
+    for (_id, surface_data) in &state.surfaces {
+        if let Some(ref wl_buffer) = surface_data.buffer {
+            buffers_to_release.push(wl_buffer.clone());
+        }
+    }
+    
+    for wl_buffer in buffers_to_release {
+        wl_buffer.release();
+    }
+    
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u32;
+        
+    for callback in state.frame_callbacks.drain(..) {
+        callback.done(time);
+    }
+    
+    display.flush_clients().ok();
+}
+
+struct NestedLoopData {
+    display: Display<State>,
+    state: State,
+}
+
+struct StandaloneLoopData {
     display: Display<State>,
     state: State,
 }
