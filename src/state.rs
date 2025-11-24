@@ -313,6 +313,9 @@ fn calculate_tiling_geometry(index: usize, screen_width: i32, screen_height: i32
         let x = col * base_width + col.min(extra_width);
         let y = row * base_height + row.min(extra_height);
         
+        let width = width.max(100);
+        let height = height.max(100);
+        
         Rectangle { x, y, width, height }
     }
 }
