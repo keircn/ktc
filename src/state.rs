@@ -199,18 +199,19 @@ fn calculate_tiling_geometry(index: usize, screen_width: i32, screen_height: i32
     }
     
     if num_windows == 2 {
+        let half = screen_width / 2;
         if index == 0 {
             Rectangle {
                 x: 0,
                 y: 0,
-                width: screen_width / 2,
+                width: half,
                 height: screen_height,
             }
         } else {
             Rectangle {
-                x: screen_width / 2,
+                x: half,
                 y: 0,
-                width: screen_width / 2,
+                width: screen_width - half,
                 height: screen_height,
             }
         }
@@ -219,14 +220,18 @@ fn calculate_tiling_geometry(index: usize, screen_width: i32, screen_height: i32
         let rows = (num_windows as i32 + cols - 1) / cols;
         let col = (index as i32) % cols;
         let row = (index as i32) / cols;
-        let width = screen_width / cols;
-        let height = screen_height / rows;
         
-        Rectangle {
-            x: col * width,
-            y: row * height,
-            width,
-            height,
-        }
+        let base_width = screen_width / cols;
+        let base_height = screen_height / rows;
+        let extra_width = screen_width % cols;
+        let extra_height = screen_height % rows;
+        
+        let width = base_width + if col < extra_width { 1 } else { 0 };
+        let height = base_height + if row < extra_height { 1 } else { 0 };
+        
+        let x = col * base_width + col.min(extra_width);
+        let y = row * base_height + row.min(extra_height);
+        
+        Rectangle { x, y, width, height }
     }
 }

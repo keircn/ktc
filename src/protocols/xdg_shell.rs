@@ -2,7 +2,7 @@ use wayland_server::{GlobalDispatch, Dispatch, Resource};
 use wayland_protocols::xdg::shell::server::{
     xdg_wm_base::{self, XdgWmBase},
     xdg_surface::{self, XdgSurface},
-    xdg_toplevel::{self, XdgToplevel},
+    xdg_toplevel::{self, XdgToplevel, State as ToplevelState},
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{self, XdgPositioner},
 };
