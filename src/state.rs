@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::os::fd::{OwnedFd, AsFd, AsRawFd};
 use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer};
 use wayland_server::Resource;
-use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel};
+use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
 
 pub type WindowId = u64;
 
@@ -115,6 +115,19 @@ impl State {
         for (i, window) in self.windows.iter_mut().enumerate() {
             window.geometry = calculate_tiling_geometry(i, screen_width, screen_height);
         }
+        
+        for i in 0..num_windows {
+            let window_id = self.windows[i].id;
+            let geometry = self.windows[i].geometry;
+            let xdg_surface = self.windows[i].xdg_surface.clone();
+            let xdg_toplevel = self.windows[i].xdg_toplevel.clone();
+            
+            let states = self.get_tiling_states_for_window(window_id);
+            let serial = self.next_keyboard_serial();
+            
+            xdg_surface.configure(serial);
+            xdg_toplevel.configure(geometry.width, geometry.height, states);
+        }
     }
     
     pub fn get_window_mut(&mut self, id: WindowId) -> Option<&mut Window> {
@@ -129,6 +142,34 @@ impl State {
     pub fn get_focused_window(&mut self) -> Option<&mut Window> {
         let focused_id = self.focused_window?;
         self.windows.iter_mut().find(|w| w.id == focused_id)
+    }
+    
+    pub fn get_tiling_states_for_window(&self, window_id: WindowId) -> Vec<u8> {
+        let num_windows = self.windows.len();
+        let window_index = self.windows.iter().position(|w| w.id == window_id);
+        
+        if num_windows == 1 {
+            return vec![];
+        }
+        
+        let mut states = vec![];
+        
+        if num_windows == 2 {
+            if window_index == Some(0) {
+                states.push(ToplevelState::TiledLeft as u8);
+            } else {
+                states.push(ToplevelState::TiledRight as u8);
+            }
+            states.push(ToplevelState::TiledTop as u8);
+            states.push(ToplevelState::TiledBottom as u8);
+        } else {
+            states.push(ToplevelState::TiledLeft as u8);
+            states.push(ToplevelState::TiledRight as u8);
+            states.push(ToplevelState::TiledTop as u8);
+            states.push(ToplevelState::TiledBottom as u8);
+        }
+        
+        states
     }
     
     pub fn remove_window(&mut self, id: WindowId) {

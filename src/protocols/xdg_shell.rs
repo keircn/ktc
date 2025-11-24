@@ -2,11 +2,11 @@ use wayland_server::{GlobalDispatch, Dispatch, Resource};
 use wayland_protocols::xdg::shell::server::{
     xdg_wm_base::{self, XdgWmBase},
     xdg_surface::{self, XdgSurface},
-    xdg_toplevel::{self, XdgToplevel, State as ToplevelState},
+    xdg_toplevel::{self, XdgToplevel},
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{self, XdgPositioner},
 };
-use crate::state::{State, Rectangle};
+use crate::state::State;
 
 impl GlobalDispatch<XdgWmBase, ()> for State {
     fn bind(
@@ -81,6 +81,7 @@ impl Dispatch<XdgSurface, ()> for State {
                     
                     state.focused_window = Some(window_id);
                     
+                    let tiling_states = state.get_tiling_states_for_window(window_id);
                     let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
                         (window.geometry.width, window.geometry.height)
                     } else {
@@ -94,7 +95,7 @@ impl Dispatch<XdgSurface, ()> for State {
                     }
                     
                     resource.configure(serial);
-                    toplevel.configure(geometry_width, geometry_height, vec![]);
+                    toplevel.configure(geometry_width, geometry_height, tiling_states);
                 } else {
                     log::warn!("[xdg_surface] GetToplevel called but no pending XdgSurface found");
                 }
