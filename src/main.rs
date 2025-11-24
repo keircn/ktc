@@ -445,45 +445,51 @@ fn render_frame(
 
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
     
-    for pixel in buffer.iter_mut() {
-        *pixel = 0xFF202020;
-    }
+    buffer.fill(0xFF202020);
     
     let mut buffers_to_release = Vec::new();
     
-    for window_obj in &loop_data.state.windows {
-        if !window_obj.mapped {
+    let num_windows = loop_data.state.windows.len();
+    for i in 0..num_windows {
+        if !loop_data.state.windows[i].mapped {
             continue;
         }
         
-        if let Some(ref wl_buffer) = window_obj.buffer {
-            if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
-                if let Some(buffer_data) = loop_data.state.buffers.get(&wl_buffer.id().protocol_id()) {
-                    let buf_width = buffer_data.width as usize;
-                    let buf_height = buffer_data.height as usize;
-                    let win_x = window_obj.geometry.x.max(0) as usize;
-                    let win_y = window_obj.geometry.y.max(0) as usize;
-                    
-                    for y in 0..buf_height.min(height.saturating_sub(win_y)) {
-                        let dst_y = win_y + y;
-                        if dst_y >= height {
+        let window_obj = &loop_data.state.windows[i];
+        let geometry = window_obj.geometry;
+        let wl_buffer_opt = window_obj.buffer.clone();
+        
+        if let Some(wl_buffer) = wl_buffer_opt {
+            let buffer_id = wl_buffer.id().protocol_id();
+            let (buf_width, buf_height) = if let Some(buffer_data) = loop_data.state.buffers.get(&buffer_id) {
+                (buffer_data.width as usize, buffer_data.height as usize)
+            } else {
+                continue;
+            };
+            
+            if let Some(pixels) = loop_data.state.get_buffer_pixels(&wl_buffer) {
+                let win_x = geometry.x.max(0) as usize;
+                let win_y = geometry.y.max(0) as usize;
+                
+                for y in 0..buf_height.min(height.saturating_sub(win_y)) {
+                    let dst_y = win_y + y;
+                    if dst_y >= height {
+                        break;
+                    }
+                    for x in 0..buf_width.min(width.saturating_sub(win_x)) {
+                        let dst_x = win_x + x;
+                        if dst_x >= width {
                             break;
                         }
-                        for x in 0..buf_width.min(width.saturating_sub(win_x)) {
-                            let dst_x = win_x + x;
-                            if dst_x >= width {
-                                break;
-                            }
-                            let src_idx = y * buf_width + x;
-                            let dst_idx = dst_y * width + dst_x;
-                            if src_idx < pixels.len() && dst_idx < buffer.len() {
-                                buffer[dst_idx] = pixels[src_idx];
-                            }
+                        let src_idx = y * buf_width + x;
+                        let dst_idx = dst_y * width + dst_x;
+                        if src_idx < pixels.len() && dst_idx < buffer.len() {
+                            buffer[dst_idx] = pixels[src_idx];
                         }
                     }
-                    
-                    buffers_to_release.push(wl_buffer.clone());
                 }
+                
+                buffers_to_release.push(wl_buffer);
             }
         }
     }
@@ -513,36 +519,43 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             
             pixels.fill(0xFF202020);
             
-            for window in &state.windows {
-                if !window.mapped {
+            let num_windows = state.windows.len();
+            for i in 0..num_windows {
+                if !state.windows[i].mapped {
                     continue;
                 }
                 
-                if let Some(ref wl_buffer) = window.buffer {
-                    if let Some(client_pixels) = state.get_buffer_pixels(wl_buffer) {
-                        if let Some(buffer_data) = state.buffers.get(&wl_buffer.id().protocol_id()) {
-                            let buf_width = buffer_data.width as usize;
-                            let buf_height = buffer_data.height as usize;
-                            let win_x = window.geometry.x.max(0) as usize;
-                            let win_y = window.geometry.y.max(0) as usize;
+                let geometry = state.windows[i].geometry;
+                let wl_buffer_opt = state.windows[i].buffer.clone();
+                
+                if let Some(wl_buffer) = wl_buffer_opt {
+                    let buffer_id = wl_buffer.id().protocol_id();
+                    let (buf_width, buf_height) = if let Some(buffer_data) = state.buffers.get(&buffer_id) {
+                        (buffer_data.width as usize, buffer_data.height as usize)
+                    } else {
+                        continue;
+                    };
+                    
+                    if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
+                        let win_x = geometry.x.max(0) as usize;
+                        let win_y = geometry.y.max(0) as usize;
+                        
+                        for y in 0..buf_height.min(drm.height.saturating_sub(win_y)) {
+                            let dst_y = win_y + y;
+                            if dst_y >= drm.height {
+                                break;
+                            }
+                            let src_offset = y * buf_width;
+                            let dst_offset = dst_y * drm.width + win_x;
+                            let copy_width = buf_width.min(drm.width.saturating_sub(win_x));
                             
-                            for y in 0..buf_height.min(drm.height.saturating_sub(win_y)) {
-                                let dst_y = win_y + y;
-                                if dst_y >= drm.height {
-                                    break;
-                                }
-                                let src_offset = y * buf_width;
-                                let dst_offset = dst_y * drm.width + win_x;
-                                let copy_width = buf_width.min(drm.width.saturating_sub(win_x));
-                                
-                                if src_offset + copy_width <= client_pixels.len() && 
-                                   dst_offset + copy_width <= pixels.len() {
-                                    std::ptr::copy_nonoverlapping(
-                                        client_pixels.as_ptr().add(src_offset),
-                                        pixels.as_mut_ptr().add(dst_offset),
-                                        copy_width
-                                    );
-                                }
+                            if src_offset + copy_width <= client_pixels.len() && 
+                               dst_offset + copy_width <= pixels.len() {
+                                std::ptr::copy_nonoverlapping(
+                                    client_pixels.as_ptr().add(src_offset),
+                                    pixels.as_mut_ptr().add(dst_offset),
+                                    copy_width
+                                );
                             }
                         }
                     }
@@ -561,7 +574,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u32;
-        
+    
     for callback in state.frame_callbacks.drain(..) {
         callback.done(time);
     }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::os::fd::{OwnedFd, AsFd, AsRawFd};
+use std::ptr::NonNull;
 use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer};
 use wayland_server::Resource;
 use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
@@ -45,9 +46,22 @@ pub struct State {
     pub pending_xdg_surfaces: HashMap<u32, (XdgSurface, WlSurface)>,
 }
 
+impl Drop for State {
+    fn drop(&mut self) {
+        for pool in self.shm_pools.values() {
+            if let Some(ptr) = pool.mmap_ptr {
+                unsafe {
+                    libc::munmap(ptr.as_ptr() as *mut libc::c_void, pool.size as usize);
+                }
+            }
+        }
+    }
+}
+
 pub struct ShmPoolData {
     pub fd: OwnedFd,
     pub size: i32,
+    pub mmap_ptr: Option<NonNull<u8>>,
 }
 
 pub struct BufferData {
@@ -196,7 +210,7 @@ impl State {
     
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
         let id = pool.id().protocol_id();
-        self.shm_pools.insert(id, ShmPoolData { fd, size });
+        self.shm_pools.insert(id, ShmPoolData { fd, size, mmap_ptr: None });
     }
     
     pub fn add_buffer(&mut self, buffer: &WlBuffer, pool: &WlShmPool, offset: i32, 
@@ -213,27 +227,40 @@ impl State {
         });
     }
     
-    pub fn get_buffer_pixels(&self, buffer: &WlBuffer) -> Option<&[u32]> {
+    pub fn get_buffer_pixels(&mut self, buffer: &WlBuffer) -> Option<&[u32]> {
         let buffer_id = buffer.id().protocol_id();
         let buffer_data = self.buffers.get(&buffer_id)?;
-        let pool_data = self.shm_pools.get(&buffer_data.pool_id)?;
+        let pool_id = buffer_data.pool_id;
+        let offset = buffer_data.offset;
+        let width = buffer_data.width;
+        let height = buffer_data.height;
+        
+        let pool_data = self.shm_pools.get_mut(&pool_id)?;
+        
+        if pool_data.mmap_ptr.is_none() {
+            unsafe {
+                let ptr = libc::mmap(
+                    std::ptr::null_mut(),
+                    pool_data.size as usize,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    pool_data.fd.as_fd().as_raw_fd(),
+                    0,
+                );
+                
+                if ptr == libc::MAP_FAILED {
+                    return None;
+                }
+                
+                pool_data.mmap_ptr = NonNull::new(ptr as *mut u8);
+            }
+        }
+        
+        let mmap_ptr = pool_data.mmap_ptr?;
         
         unsafe {
-            let ptr = libc::mmap(
-                std::ptr::null_mut(),
-                pool_data.size as usize,
-                libc::PROT_READ,
-                libc::MAP_SHARED,
-                pool_data.fd.as_fd().as_raw_fd(),
-                0,
-            );
-            
-            if ptr == libc::MAP_FAILED {
-                return None;
-            }
-            
-            let buffer_start = (ptr as *const u8).add(buffer_data.offset as usize) as *const u32;
-            let pixel_count = (buffer_data.width * buffer_data.height) as usize;
+            let buffer_start = mmap_ptr.as_ptr().add(offset as usize) as *const u32;
+            let pixel_count = (width * height) as usize;
             
             Some(std::slice::from_raw_parts(buffer_start, pixel_count))
         }
