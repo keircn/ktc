@@ -4,7 +4,7 @@ mod input;
 mod logging;
 
 use clap::{Parser, Subcommand};
-use input::{InputAction, KeyState};
+use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
 use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
