@@ -85,6 +85,7 @@ name = "ktc"
 version = "0.1.0"
 dependencies = [
  "calloop",
+ "wayland-protocols",
  "wayland-server",
 ]
 
@@ -230,6 +231,18 @@ dependencies = [
  "rustix",
  "smallvec",
  "wayland-sys",
+]
+
+[[package]]
+name = "wayland-protocols"
+version = "0.32.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efa790ed75fbfd71283bd2521a1cfdc022aabcc28bdcff00851f9e4ae88d9901"
+dependencies = [
+ "bitflags",
+ "wayland-backend",
+ "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]

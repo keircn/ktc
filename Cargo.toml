@@ -1,8 +1,9 @@
 [package]
 name = "ktc"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["server"] }
 calloop = "0.14"
