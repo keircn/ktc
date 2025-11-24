@@ -62,34 +62,54 @@ impl InputHandler {
     {
         let mut keyboard_events = Vec::new();
         let mut has_keyboard_device = false;
+        let mut event_count = 0;
         
         for event in &mut self.libinput {
+            event_count += 1;
+            log::info!("Input event received: {:?}", event);
+            
             match event {
                 Event::Keyboard(keyboard_event) => {
-                    keyboard_events.push((keyboard_event.key(), keyboard_event.key_state()));
+                    let key = keyboard_event.key();
+                    let state = keyboard_event.key_state();
+                    log::info!("Keyboard event: key={}, state={:?}", key, state);
+                    keyboard_events.push((key, state));
                 }
                 Event::Device(device_event) => {
                     use input::event::DeviceEvent;
+                    log::info!("Device event: {:?}", device_event);
                     if let DeviceEvent::Added(added) = device_event {
                         if added.device().has_capability(input::DeviceCapability::Keyboard) {
+                            log::info!("Keyboard device added");
                             has_keyboard_device = true;
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    log::info!("Other event type");
+                }
             }
         }
         
+        if event_count == 0 {
+            log::info!("No events in libinput queue");
+        } else {
+            log::info!("Processed {} events total", event_count);
+        }
+        
         if has_keyboard_device {
+            log::info!("Initializing XKB state for new keyboard");
             self.init_xkb_state();
         }
         
+        log::info!("Processing {} keyboard events", keyboard_events.len());
         for (key, state) in keyboard_events {
             self.handle_keyboard_key(key, state, &mut callback);
         }
     }
     
     fn init_xkb_state(&mut self) {
+        log::info!("Initializing XKB keymap");
         let keymap = xkb::Keymap::new_from_names(
             &self.xkb_context,
             "",
@@ -101,7 +121,10 @@ impl InputHandler {
         );
         
         if let Some(keymap) = keymap {
+            log::info!("XKB keymap created successfully");
             self.xkb_state = Some(xkb::State::new(&keymap));
+        } else {
+            log::error!("Failed to create XKB keymap");
         }
     }
     
@@ -111,7 +134,10 @@ impl InputHandler {
     {
         use input::event::keyboard::KeyState;
         
+        log::info!("Handling keyboard key: key={}, state={:?}", key, state);
+        
         if self.xkb_state.is_none() {
+            log::warn!("XKB state not initialized, initializing now");
             self.init_xkb_state();
         }
         
@@ -138,6 +164,9 @@ impl InputHandler {
             if state == KeyState::Pressed {
                 let keysym = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode));
                 
+                log::info!("Key pressed: keycode={}, keysym={}, ctrl={}, alt={}", 
+                    keycode, keysym.raw(), self.ctrl, self.alt);
+                
                 if self.ctrl && self.alt && keysym == KEY_q.into() {
                     log::info!("Ctrl+Alt+Q detected");
                     callback(InputAction::ExitCompositor);
@@ -146,6 +175,8 @@ impl InputHandler {
                     callback(InputAction::LaunchTerminal);
                 }
             }
+        } else {
+            log::error!("XKB state still not available after initialization");
         }
     }
     
