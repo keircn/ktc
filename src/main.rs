@@ -199,6 +199,8 @@ fn run_nested() {
         display,
         state: State::new(),
     };
+    
+    loop_data.state.set_screen_size(1920, 1080);
 
     winit_loop.run(move |event, target| {
         target.set_control_flow(ControlFlow::Poll);

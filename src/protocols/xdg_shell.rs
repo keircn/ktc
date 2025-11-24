@@ -76,7 +76,7 @@ impl Dispatch<XdgSurface, ()> for State {
                 
                 let xdg_id = resource.id().protocol_id();
                 if let Some((xdg_surface, wl_surface)) = state.pending_xdg_surfaces.remove(&xdg_id) {
-                    let window_id = state.add_window(xdg_surface, toplevel.clone(), wl_surface.clone(), 1920, 1080);
+                    let window_id = state.add_window(xdg_surface, toplevel.clone(), wl_surface.clone());
                     log::info!("[xdg_surface] Created window id={}", window_id);
                     
                     state.focused_window = Some(window_id);
@@ -85,7 +85,7 @@ impl Dispatch<XdgSurface, ()> for State {
                     let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
                         (window.geometry.width, window.geometry.height)
                     } else {
-                        (1920, 1080)
+                        (state.screen_width, state.screen_height)
                     };
                     
                     let serial = state.next_keyboard_serial();
@@ -107,6 +107,9 @@ impl Dispatch<XdgSurface, ()> for State {
             xdg_surface::Request::AckConfigure { serial } => {
                 log::info!("[xdg_surface] AckConfigure: serial={}", serial);
             }
+            xdg_surface::Request::Destroy => {
+                log::info!("[xdg_surface] Destroy");
+            }
             _ => {}
         }
     }
@@ -117,11 +120,18 @@ impl Dispatch<XdgToplevel, ()> for State {
         _state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &XdgToplevel,
-        _request: xdg_toplevel::Request,
+        request: xdg_toplevel::Request,
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+        match request {
+            xdg_toplevel::Request::Destroy => {
+                log::info!("[xdg_toplevel] Destroy");
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Dispatch<XdgPopup, ()> for State {

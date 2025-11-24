@@ -30,6 +30,9 @@ pub struct State {
     pub focused_window: Option<WindowId>,
     pub next_window_id: WindowId,
     
+    pub screen_width: i32,
+    pub screen_height: i32,
+    
     pub shm_pools: HashMap<u32, ShmPoolData>,
     pub buffers: HashMap<u32, BufferData>,
     pub frame_callbacks: Vec<WlCallback>,
@@ -62,6 +65,8 @@ impl State {
             windows: Vec::new(),
             focused_window: None,
             next_window_id: 1,
+            screen_width: 1920,
+            screen_height: 1080,
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
@@ -71,6 +76,11 @@ impl State {
             pointer_serial: 0,
             pending_xdg_surfaces: HashMap::new(),
         }
+    }
+    
+    pub fn set_screen_size(&mut self, width: i32, height: i32) {
+        self.screen_width = width;
+        self.screen_height = height;
     }
     
     pub fn next_keyboard_serial(&mut self) -> u32 {
@@ -83,12 +93,12 @@ impl State {
         self.pointer_serial
     }
     
-    pub fn add_window(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface, screen_width: i32, screen_height: i32) -> WindowId {
+    pub fn add_window(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface) -> WindowId {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
         let num_windows = self.windows.len();
-        let geometry = calculate_tiling_geometry(num_windows, screen_width, screen_height);
+        let geometry = calculate_tiling_geometry(num_windows, self.screen_width, self.screen_height);
         
         self.windows.push(Window {
             id,
@@ -101,16 +111,19 @@ impl State {
             pending_buffer: None,
         });
         
-        self.relayout_windows(screen_width, screen_height);
+        self.relayout_windows();
         
         id
     }
     
-    pub fn relayout_windows(&mut self, screen_width: i32, screen_height: i32) {
+    pub fn relayout_windows(&mut self) {
         let num_windows = self.windows.len();
         if num_windows == 0 {
             return;
         }
+        
+        let screen_width = self.screen_width;
+        let screen_height = self.screen_height;
         
         for (i, window) in self.windows.iter_mut().enumerate() {
             window.geometry = calculate_tiling_geometry(i, screen_width, screen_height);
