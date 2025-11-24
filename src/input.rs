@@ -1,5 +1,6 @@
 use input::event::{Event, EventTrait};
 use input::event::keyboard::KeyboardEventTrait;
+pub use input::event::keyboard::KeyState;
 use input::{Libinput, LibinputInterface};
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -170,11 +171,18 @@ impl InputHandler {
                 if self.ctrl && self.alt && keysym == KEY_q.into() {
                     log::info!("Ctrl+Alt+Q detected");
                     callback(InputAction::ExitCompositor);
+                    return;
                 } else if self.alt && keysym == KEY_t.into() {
                     log::info!("Alt+T detected");
                     callback(InputAction::LaunchTerminal);
+                    return;
                 }
             }
+            
+            callback(InputAction::KeyEvent { 
+                keycode: keycode - 8, 
+                state 
+            });
         } else {
             log::error!("XKB state still not available after initialization");
         }
@@ -188,4 +196,5 @@ impl InputHandler {
 pub enum InputAction {
     ExitCompositor,
     LaunchTerminal,
+    KeyEvent { keycode: u32, state: KeyState },
 }

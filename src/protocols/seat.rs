@@ -23,7 +23,7 @@ impl GlobalDispatch<WlSeat, ()> for State {
 
 impl Dispatch<WlSeat, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &WlSeat,
         request: wl_seat::Request,
@@ -33,10 +33,14 @@ impl Dispatch<WlSeat, ()> for State {
     ) {
         match request {
             wl_seat::Request::GetPointer { id } => {
-                data_init.init(id, ());
+                let pointer = data_init.init(id, ());
+                state.pointers.push(pointer);
+                log::info!("[seat] Pointer created, total pointers: {}", state.pointers.len());
             }
             wl_seat::Request::GetKeyboard { id } => {
-                data_init.init(id, ());
+                let keyboard = data_init.init(id, ());
+                state.keyboards.push(keyboard);
+                log::info!("[seat] Keyboard created, total keyboards: {}", state.keyboards.len());
             }
             wl_seat::Request::GetTouch { id } => {
                 data_init.init(id, ());

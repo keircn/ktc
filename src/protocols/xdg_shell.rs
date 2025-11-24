@@ -1,4 +1,4 @@
-use wayland_server::{GlobalDispatch, Dispatch};
+use wayland_server::{GlobalDispatch, Dispatch, Resource};
 use wayland_protocols::xdg::shell::server::{
     xdg_wm_base::{self, XdgWmBase},
     xdg_surface::{self, XdgSurface},
@@ -36,9 +36,13 @@ impl Dispatch<XdgWmBase, ()> for State {
                 log::info!("[xdg_wm_base] CreatePositioner");
                 data_init.init(id, ());
             }
-            xdg_wm_base::Request::GetXdgSurface { id, surface: _ } => {
-                log::info!("[xdg_wm_base] GetXdgSurface");
+            xdg_wm_base::Request::GetXdgSurface { id, surface } => {
+                log::info!("[xdg_wm_base] GetXdgSurface for surface {:?}", surface.id());
                 data_init.init(id, ());
+                let surf_id = surface.id().protocol_id();
+                if let Some(surf_data) = _state.surfaces.get_mut(&surf_id) {
+                    surf_data.wl_surface = Some(surface.clone());
+                }
             }
             _ => {}
         }
@@ -59,7 +63,7 @@ impl Dispatch<XdgPositioner, ()> for State {
 
 impl Dispatch<XdgSurface, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
         resource: &XdgSurface,
         request: xdg_surface::Request,
@@ -72,6 +76,26 @@ impl Dispatch<XdgSurface, ()> for State {
                 log::info!("[xdg_surface] GetToplevel");
                 let toplevel = data_init.init(id, ());
                 log::info!("[xdg_surface] Sending configure events");
+                
+                let mut found_surface = None;
+                for (_, surf_data) in &state.surfaces {
+                    if let Some(ref surface) = surf_data.wl_surface {
+                        found_surface = Some(surface.clone());
+                        break;
+                    }
+                }
+                
+                if let Some(surface) = found_surface {
+                    log::info!("[xdg_surface] Setting focus to new toplevel surface: {:?}", surface.id());
+                    state.focused_surface = Some(surface.clone());
+                    
+                    let serial = state.next_keyboard_serial();
+                    for keyboard in &state.keyboards {
+                        log::info!("[xdg_surface] Sending keyboard enter to surface, serial={}", serial);
+                        keyboard.enter(serial, &surface, vec![]);
+                    }
+                }
+                
                 resource.configure(1);
                 toplevel.configure(0, 0, vec![]);
             }

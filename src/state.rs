@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::os::fd::{OwnedFd, AsFd, AsRawFd};
-use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback};
+use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer};
 use wayland_server::Resource;
 
 pub struct State {
@@ -8,6 +8,11 @@ pub struct State {
     pub shm_pools: HashMap<u32, ShmPoolData>,
     pub buffers: HashMap<u32, BufferData>,
     pub frame_callbacks: Vec<WlCallback>,
+    pub keyboards: Vec<WlKeyboard>,
+    pub pointers: Vec<WlPointer>,
+    pub focused_surface: Option<WlSurface>,
+    pub keyboard_serial: u32,
+    pub pointer_serial: u32,
 }
 
 #[derive(Default)]
@@ -15,6 +20,7 @@ pub struct SurfaceData {
     pub buffer: Option<WlBuffer>,
     pub pending_buffer: Option<WlBuffer>,
     pub size: (i32, i32),
+    pub wl_surface: Option<WlSurface>,
 }
 
 pub struct ShmPoolData {
@@ -38,7 +44,22 @@ impl State {
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
+            keyboards: Vec::new(),
+            pointers: Vec::new(),
+            focused_surface: None,
+            keyboard_serial: 0,
+            pointer_serial: 0,
         }
+    }
+    
+    pub fn next_keyboard_serial(&mut self) -> u32 {
+        self.keyboard_serial += 1;
+        self.keyboard_serial
+    }
+    
+    pub fn next_pointer_serial(&mut self) -> u32 {
+        self.pointer_serial += 1;
+        self.pointer_serial
     }
     
     pub fn get_surface_data(&mut self, surface: &WlSurface) -> &mut SurfaceData {

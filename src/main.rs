@@ -3,6 +3,8 @@ mod protocols;
 mod input;
 mod logging;
 
+use input::{InputAction, KeyState};
+use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
 use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
@@ -287,6 +289,22 @@ fn run_standalone() {
                                             log::error!("Failed to launch ghostty: {}", e);
                                             log::info!("Make sure ghostty is installed and in PATH");
                                         }
+                                    }
+                                }
+                                InputAction::KeyEvent { keycode, state: key_state } => {
+                                    if let Some(ref focused) = data.state.focused_surface {
+                                        let wl_state = match key_state {
+                                            KeyState::Pressed => WlKeyState::Pressed,
+                                            KeyState::Released => WlKeyState::Released,
+                                        };
+                                        
+                                        let serial = data.state.next_keyboard_serial();
+                                        for keyboard in &data.state.keyboards {
+                                            log::info!("Forwarding key event to client: keycode={}, state={:?}, serial={}", 
+                                                keycode, wl_state, serial);
+                                            keyboard.key(serial, 0, keycode, wl_state);
+                                        }
+                                        data.display.flush_clients().ok();
                                     }
                                 }
                             }

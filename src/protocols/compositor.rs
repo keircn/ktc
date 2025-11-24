@@ -33,7 +33,9 @@ impl Dispatch<WlCompositor, ()> for State {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
                 log::info!("[compositor] CreateSurface");
-                data_init.init(id, ());
+                let surface = data_init.init(id, ());
+                let surface_data = _state.get_surface_data(&surface);
+                surface_data.wl_surface = Some(surface);
             }
             wl_compositor::Request::CreateRegion { id } => {
                 log::info!("[compositor] CreateRegion");
