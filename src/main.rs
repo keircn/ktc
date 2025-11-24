@@ -39,12 +39,12 @@ enum Commands {
 }
 
 fn main() {
-    logging::FileLogger::init().expect("Failed to initialize logging");
-    
     let cli = Cli::parse();
     
     match cli.command {
         Some(Commands::Start { nested, standalone }) => {
+            logging::FileLogger::init().expect("Failed to initialize logging");
+            
             if nested && standalone {
                 eprintln!("Error: Cannot specify both --nested and --standalone");
                 std::process::exit(1);
@@ -96,7 +96,6 @@ fn print_help() {
     println!("KEYBINDS:");
     println!("    Ctrl+Alt+Q           Exit compositor");
     println!("    Alt+T                Launch terminal (ghostty)");
-}
 }
 
 fn setup_wayland() -> (Display<State>, ListeningSocket) {
