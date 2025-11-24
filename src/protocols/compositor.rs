@@ -2,6 +2,7 @@ use wayland_server::{GlobalDispatch, Dispatch};
 use wayland_server::protocol::{
     wl_compositor::{self, WlCompositor},
     wl_surface::{self, WlSurface},
+    wl_callback::WlCallback,
 };
 use crate::state::State;
 
@@ -39,12 +40,42 @@ impl Dispatch<WlCompositor, ()> for State {
 
 impl Dispatch<WlSurface, ()> for State {
     fn request(
+        state: &mut Self,
+        _client: &wayland_server::Client,
+        resource: &WlSurface,
+        request: wl_surface::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            wl_surface::Request::Attach { buffer, .. } => {
+                let surface_data = state.get_surface_data(resource);
+                surface_data.pending_buffer = buffer;
+            }
+            wl_surface::Request::Commit => {
+                let surface_data = state.get_surface_data(resource);
+                if let Some(buffer) = surface_data.pending_buffer.take() {
+                    surface_data.buffer = Some(buffer);
+                }
+            }
+            wl_surface::Request::Frame { callback } => {
+                data_init.init(callback, ());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlCallback, ()> for State {
+    fn request(
         _state: &mut Self,
         _client: &wayland_server::Client,
-        _resource: &WlSurface,
-        _request: wl_surface::Request,
+        _resource: &WlCallback,
+        _request: wayland_server::protocol::wl_callback::Request,
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {}
 }
+
