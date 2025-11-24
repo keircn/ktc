@@ -141,6 +141,11 @@ fn run_standalone() {
     use input::{InputHandler, InputAction};
     
     let (mut display, socket) = setup_wayland();
+    
+    let socket_name = socket.socket_name()
+        .expect("Failed to get socket name")
+        .to_string_lossy()
+        .to_string();
 
     let drm_device = OpenOptions::new()
         .read(true)
@@ -245,12 +250,26 @@ fn run_standalone() {
                         handler.process_events(|action| {
                             match action {
                                 InputAction::ExitCompositor => {
-                                    eprintln!("Ctrl+Alt+Delete pressed, exiting compositor");
                                     should_exit = true;
                                 }
                                 InputAction::LaunchTerminal => {
-                                    eprintln!("Alt+T pressed, launching ghostty");
-                                    std::process::Command::new("ghostty").spawn().ok();
+                                    eprintln!("Launching ghostty terminal...");
+                                    
+                                    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+                                        .unwrap_or_else(|_| "/tmp".to_string());
+                                    
+                                    match std::process::Command::new("ghostty")
+                                        .env("WAYLAND_DISPLAY", &data.socket_name)
+                                        .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
+                                        .spawn() {
+                                        Ok(child) => {
+                                            eprintln!("ghostty launched with PID {} on {}", child.id(), data.socket_name);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to launch ghostty: {}", e);
+                                            eprintln!("Make sure ghostty is installed and in PATH");
+                                        }
+                                    }
                                 }
                             }
                         });
@@ -280,9 +299,10 @@ fn run_standalone() {
         state: State::new(),
         drm_info,
         input_handler,
+        socket_name,
     };
 
-    println!("Compositor running in standalone mode. Press Ctrl+Alt+Delete to exit.");
+    println!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
     
     loop {
         calloop_loop.dispatch(None, &mut loop_data).expect("Event loop error");
@@ -419,6 +439,7 @@ struct StandaloneLoopData {
     state: State,
     drm_info: Option<DrmInfo>,
     input_handler: Option<input::InputHandler>,
+    socket_name: String,
 }
 
 struct DrmInfo {

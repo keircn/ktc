@@ -6,7 +6,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use xkbcommon::xkb;
-use xkbcommon::xkb::keysyms::{KEY_Delete, KEY_t};
+use xkbcommon::xkb::keysyms::{KEY_q, KEY_t};
 
 struct Interface;
 
@@ -138,9 +138,13 @@ impl InputHandler {
             if state == KeyState::Pressed {
                 let keysym = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode));
                 
-                if self.ctrl && self.alt && keysym == KEY_Delete.into() {
+                eprintln!("Key pressed: keycode={}, keysym={}, ctrl={}, alt={}", keycode, keysym.raw(), self.ctrl, self.alt);
+                
+                if self.ctrl && self.alt && keysym == KEY_q.into() {
+                    eprintln!("Ctrl+Alt+Q detected - exiting compositor");
                     callback(InputAction::ExitCompositor);
                 } else if self.alt && keysym == KEY_t.into() {
+                    eprintln!("Alt+T detected - launching terminal");
                     callback(InputAction::LaunchTerminal);
                 }
             }
