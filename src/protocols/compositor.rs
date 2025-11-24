@@ -60,7 +60,8 @@ impl Dispatch<WlSurface, ()> for State {
                 }
             }
             wl_surface::Request::Frame { callback } => {
-                data_init.init(callback, ());
+                let cb = data_init.init(callback, ());
+                state.frame_callbacks.push(cb);
             }
             _ => {}
         }

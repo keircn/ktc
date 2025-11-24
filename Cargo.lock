@@ -527,6 +527,7 @@ name = "ktc"
 version = "0.1.0"
 dependencies = [
  "calloop 0.14.3",
+ "libc",
  "softbuffer",
  "wayland-protocols",
  "wayland-server",

@@ -1,7 +1,7 @@
 mod state;
 mod protocols;
 
-use wayland_server::{Display, ListeningSocket};
+use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
     wl_seat::WlSeat,
@@ -110,10 +110,52 @@ fn main() {
                 ).ok();
 
                 let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
+                
                 for pixel in buffer.iter_mut() {
                     *pixel = 0xFF202020;
                 }
+                
+                let mut buffers_to_release = Vec::new();
+                
+                for (_id, surface_data) in &loop_data.state.surfaces {
+                    if let Some(ref wl_buffer) = surface_data.buffer {
+                        if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
+                            if let Some(buffer_data) = loop_data.state.buffers.get(&wl_buffer.id().protocol_id()) {
+                                let buf_width = buffer_data.width as usize;
+                                let buf_height = buffer_data.height as usize;
+                                
+                                for y in 0..buf_height.min(height) {
+                                    for x in 0..buf_width.min(width) {
+                                        let src_idx = y * buf_width + x;
+                                        let dst_idx = y * width + x;
+                                        if src_idx < pixels.len() && dst_idx < buffer.len() {
+                                            buffer[dst_idx] = pixels[src_idx];
+                                        }
+                                    }
+                                }
+                                
+                                buffers_to_release.push(wl_buffer.clone());
+                            }
+                        }
+                    }
+                }
+                
                 buffer.present().ok();
+                
+                for wl_buffer in buffers_to_release {
+                    wl_buffer.release();
+                }
+                
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u32;
+                    
+                for callback in loop_data.state.frame_callbacks.drain(..) {
+                    callback.done(time);
+                }
+                
+                loop_data.display.flush_clients().ok();
             }
             Event::AboutToWait => {
                 window.request_redraw();

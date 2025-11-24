@@ -9,3 +9,4 @@ wayland-protocols = { version = "0.32", features = ["server"] }
 calloop = "0.14"
 winit = "0.30"
 softbuffer = "0.4"
+libc = "0.2"

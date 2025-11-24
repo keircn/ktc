@@ -55,7 +55,7 @@ impl GlobalDispatch<WlShm, ()> for State {
 
 impl Dispatch<WlShm, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &WlShm,
         request: wl_shm::Request,
@@ -64,8 +64,9 @@ impl Dispatch<WlShm, ()> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         match request {
-            wl_shm::Request::CreatePool { id, .. } => {
-                data_init.init(id, ());
+            wl_shm::Request::CreatePool { id, fd, size } => {
+                let pool = data_init.init(id, ());
+                state.add_shm_pool(&pool, fd, size);
             }
             _ => {}
         }
@@ -74,17 +75,18 @@ impl Dispatch<WlShm, ()> for State {
 
 impl Dispatch<WlShmPool, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
-        _resource: &WlShmPool,
+        resource: &WlShmPool,
         request: wl_shm_pool::Request,
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         match request {
-            wl_shm_pool::Request::CreateBuffer { id, .. } => {
-                data_init.init(id, ());
+            wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } => {
+                let buffer = data_init.init(id, ());
+                state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
             }
             _ => {}
         }
