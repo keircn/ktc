@@ -414,6 +414,12 @@ fn run_standalone() {
         input_handler,
         socket_name,
     };
+    
+    if let Some(ref drm) = loop_data.drm_info {
+        loop_data.state.set_screen_size(drm.width as i32, drm.height as i32);
+    } else {
+        loop_data.state.set_screen_size(1366, 768);
+    }
 
     log::info!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
     
