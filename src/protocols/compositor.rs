@@ -1,8 +1,9 @@
-use wayland_server::{GlobalDispatch, Dispatch};
+use wayland_server::{GlobalDispatch, Dispatch, Resource};
 use wayland_server::protocol::{
     wl_compositor::{self, WlCompositor},
     wl_surface::{self, WlSurface},
     wl_callback::WlCallback,
+    wl_region::{self, WlRegion},
 };
 use crate::state::State;
 
@@ -31,6 +32,11 @@ impl Dispatch<WlCompositor, ()> for State {
     ) {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
+                eprintln!("[compositor] CreateSurface");
+                data_init.init(id, ());
+            }
+            wl_compositor::Request::CreateRegion { id } => {
+                eprintln!("[compositor] CreateRegion");
                 data_init.init(id, ());
             }
             _ => {}
@@ -50,16 +56,20 @@ impl Dispatch<WlSurface, ()> for State {
     ) {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
+                eprintln!("[surface] Attach buffer: {:?}", buffer.as_ref().map(|b| b.id()));
                 let surface_data = state.get_surface_data(resource);
                 surface_data.pending_buffer = buffer;
             }
             wl_surface::Request::Commit => {
+                eprintln!("[surface] Commit");
                 let surface_data = state.get_surface_data(resource);
                 if let Some(buffer) = surface_data.pending_buffer.take() {
+                    eprintln!("[surface] Committing buffer: {:?}", buffer.id());
                     surface_data.buffer = Some(buffer);
                 }
             }
             wl_surface::Request::Frame { callback } => {
+                eprintln!("[surface] Frame callback requested");
                 let cb = data_init.init(callback, ());
                 state.frame_callbacks.push(cb);
             }
@@ -80,3 +90,14 @@ impl Dispatch<WlCallback, ()> for State {
     ) {}
 }
 
+impl Dispatch<WlRegion, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &WlRegion,
+        _request: wl_region::Request,
+        _data: &(),
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {}
+}

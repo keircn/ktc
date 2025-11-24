@@ -5,17 +5,18 @@ A minimal, from-scratch Wayland compositor written in Rust. Built for learning a
 ## Features
 
 ### Protocol Support
-- Core protocols: `wl_compositor`, `wl_surface`, `wl_shm`, `wl_buffer`
-- Shell: `xdg_wm_base`, `xdg_surface`, `xdg_toplevel`
+- Core protocols: `wl_compositor`, `wl_surface`, `wl_region`, `wl_shm`, `wl_buffer`
+- Shell: `xdg_wm_base`, `xdg_surface`, `xdg_toplevel`, `xdg_popup`, `xdg_positioner`
 - Input: `wl_seat`, `wl_pointer`, `wl_keyboard` (events advertised, forwarding TODO)
 - Output: `wl_output` (1920x1080@60Hz advertised)
 - Data: `wl_data_device_manager` (clipboard/DnD)
 
 ### Rendering
-- Shared memory (SHM) buffer support
+- Shared memory (SHM) buffer support with mmap
 - Software rendering via `softbuffer`
 - Frame callbacks for smooth client updates
 - Buffer release events
+- XDG surface configure events for window management
 - Nested window mode (runs within existing compositor)
 
 ### In Progress
@@ -30,10 +31,11 @@ A minimal, from-scratch Wayland compositor written in Rust. Built for learning a
 cargo run
 
 # In another terminal, test with clients:
+WAYLAND_DISPLAY=wayland-1 gnome-control-center
 WAYLAND_DISPLAY=wayland-1 gnome-calculator
 ```
 
-The compositor creates a window showing connected clients. Currently only the first surface is rendered.
+The compositor creates a window showing connected clients. Successfully renders GTK applications like gnome-control-center.
 
 ## Dependencies
 
@@ -51,4 +53,5 @@ The compositor creates a window showing connected clients. Currently only the fi
 - No window positioning/decoration
 - Software rendering only (no GPU acceleration)
 - Nested mode only (no DRM/KMS backend)
+- SHM buffers only (no DMA-BUF/Vulkan support)
 

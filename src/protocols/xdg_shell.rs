@@ -33,9 +33,11 @@ impl Dispatch<XdgWmBase, ()> for State {
     ) {
         match request {
             xdg_wm_base::Request::CreatePositioner { id } => {
+                eprintln!("[xdg_wm_base] CreatePositioner");
                 data_init.init(id, ());
             }
             xdg_wm_base::Request::GetXdgSurface { id, .. } => {
+                eprintln!("[xdg_wm_base] GetXdgSurface");
                 data_init.init(id, ());
             }
             _ => {}
@@ -59,7 +61,7 @@ impl Dispatch<XdgSurface, ()> for State {
     fn request(
         _state: &mut Self,
         _client: &wayland_server::Client,
-        _resource: &XdgSurface,
+        resource: &XdgSurface,
         request: xdg_surface::Request,
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
@@ -67,10 +69,17 @@ impl Dispatch<XdgSurface, ()> for State {
     ) {
         match request {
             xdg_surface::Request::GetToplevel { id } => {
-                data_init.init(id, ());
+                eprintln!("[xdg_surface] GetToplevel");
+                let toplevel = data_init.init(id, ());
+                resource.configure(1);
+                toplevel.configure(0, 0, vec![]);
             }
             xdg_surface::Request::GetPopup { id, .. } => {
+                eprintln!("[xdg_surface] GetPopup");
                 data_init.init(id, ());
+            }
+            xdg_surface::Request::AckConfigure { .. } => {
+                eprintln!("[xdg_surface] AckConfigure");
             }
             _ => {}
         }
