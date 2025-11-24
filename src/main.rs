@@ -1,6 +1,7 @@
 mod state;
 mod protocols;
 mod input;
+mod logging;
 
 use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
@@ -16,6 +17,8 @@ use std::sync::Arc;
 use state::State;
 
 fn main() {
+    logging::FileLogger::init().expect("Failed to initialize logging");
+    
     let is_nested = std::env::var("WAYLAND_DISPLAY")
         .ok()
         .filter(|v| !v.is_empty())
@@ -26,10 +29,10 @@ fn main() {
             .is_some();
     
     if is_nested {
-        println!("Running in nested mode (client of existing compositor)");
+        log::info!("Running in nested mode (client of existing compositor)");
         run_nested();
     } else {
-        println!("Running in standalone mode (native compositor)");
+        log::info!("Running in standalone mode (native compositor)");
         run_standalone();
     }
 }
@@ -48,7 +51,7 @@ fn setup_wayland() -> (Display<State>, ListeningSocket) {
     let socket = ListeningSocket::bind_auto("wayland", 0..32)
         .expect("Failed to create socket");
     
-    println!("Listening on: {}", socket.socket_name().unwrap().to_string_lossy());
+    log::info!("Listening on: {}", socket.socket_name().unwrap().to_string_lossy());
     
     (display, socket)
 }
@@ -155,37 +158,37 @@ fn run_standalone() {
 
     let drm_info = match drm_device {
         Ok(device) => {
-            eprintln!("Opened DRM device");
+            log::info!("Opened DRM device");
             match setup_drm(&device) {
                 Ok(info) => {
-                    eprintln!("DRM setup complete: {}x{}", info.width, info.height);
+                    log::info!("DRM setup complete: {}x{}", info.width, info.height);
                     Some(info)
                 }
                 Err(e) => {
-                    eprintln!("Failed to setup DRM: {}", e);
-                    eprintln!("Running in headless mode");
-                    eprintln!("Tip: Make sure you're in the 'video' group or running as root");
-                    eprintln!("     Or run under an existing compositor for nested mode");
+                    log::error!("Failed to setup DRM: {}", e);
+                    log::warn!("Running in headless mode");
+                    log::info!("Tip: Make sure you're in the 'video' group or running as root");
+                    log::info!("     Or run under an existing compositor for nested mode");
                     None
                 }
             }
         }
         Err(e) => {
-            eprintln!("Failed to open DRM device: {}", e);
-            eprintln!("Running in headless mode (no display output)");
-            eprintln!("To see client windows, run this compositor in nested mode instead.");
+            log::error!("Failed to open DRM device: {}", e);
+            log::warn!("Running in headless mode (no display output)");
+            log::info!("To see client windows, run this compositor in nested mode instead.");
             None
         }
     };
 
     let input_handler = match InputHandler::new() {
         Ok(handler) => {
-            eprintln!("Input handler initialized");
+            log::info!("Input handler initialized");
             Some(handler)
         }
         Err(e) => {
-            eprintln!("Failed to initialize input handler: {}", e);
-            eprintln!("Input will not be available");
+            log::error!("Failed to initialize input handler: {}", e);
+            log::warn!("Input will not be available");
             None
         }
     };
@@ -250,10 +253,11 @@ fn run_standalone() {
                         handler.process_events(|action| {
                             match action {
                                 InputAction::ExitCompositor => {
+                                    log::info!("Ctrl+Alt+Q pressed - exiting compositor");
                                     should_exit = true;
                                 }
                                 InputAction::LaunchTerminal => {
-                                    eprintln!("Launching ghostty terminal...");
+                                    log::info!("Alt+T pressed - launching ghostty terminal");
                                     
                                     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                                         .unwrap_or_else(|_| "/tmp".to_string());
@@ -263,11 +267,11 @@ fn run_standalone() {
                                         .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
                                         .spawn() {
                                         Ok(child) => {
-                                            eprintln!("ghostty launched with PID {} on {}", child.id(), data.socket_name);
+                                            log::info!("ghostty launched with PID {} on {}", child.id(), data.socket_name);
                                         }
                                         Err(e) => {
-                                            eprintln!("Failed to launch ghostty: {}", e);
-                                            eprintln!("Make sure ghostty is installed and in PATH");
+                                            log::error!("Failed to launch ghostty: {}", e);
+                                            log::info!("Make sure ghostty is installed and in PATH");
                                         }
                                     }
                                 }
@@ -302,7 +306,7 @@ fn run_standalone() {
         socket_name,
     };
 
-    println!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
+    log::info!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
     
     loop {
         calloop_loop.dispatch(None, &mut loop_data).expect("Event loop error");
@@ -484,7 +488,7 @@ fn setup_drm(device: &std::fs::File) -> Result<DrmInfo, Box<dyn std::error::Erro
         .ok_or("No display mode available")?;
     
     let (width, height) = mode.size();
-    eprintln!("Using mode: {}x{}", width, height);
+    log::info!("Using display mode: {}x{}", width, height);
     
     let crtc_handle = res.crtcs().first()
         .copied()

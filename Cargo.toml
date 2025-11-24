@@ -15,3 +15,5 @@ drm = "0.14"
 gbm = "0.15"
 input = { version = "0.9", features = ["libinput_1_21"] }
 xkbcommon = "0.8"
+log = "0.4"
+chrono = "0.4"

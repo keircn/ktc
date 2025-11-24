@@ -138,13 +138,11 @@ impl InputHandler {
             if state == KeyState::Pressed {
                 let keysym = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode));
                 
-                eprintln!("Key pressed: keycode={}, keysym={}, ctrl={}, alt={}", keycode, keysym.raw(), self.ctrl, self.alt);
-                
                 if self.ctrl && self.alt && keysym == KEY_q.into() {
-                    eprintln!("Ctrl+Alt+Q detected - exiting compositor");
+                    log::info!("Ctrl+Alt+Q detected");
                     callback(InputAction::ExitCompositor);
                 } else if self.alt && keysym == KEY_t.into() {
-                    eprintln!("Alt+T detected - launching terminal");
+                    log::info!("Alt+T detected");
                     callback(InputAction::LaunchTerminal);
                 }
             }
