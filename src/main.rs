@@ -211,7 +211,7 @@ fn run_standalone() {
     use std::fs::OpenOptions;
     use input::{InputHandler, InputAction};
     
-    let tty_guard = setup_tty();
+    let _tty_guard = setup_tty();
     
     let (mut display, socket) = setup_wayland();
     
@@ -353,7 +353,9 @@ fn run_standalone() {
                                     }
                                 }
                                 InputAction::KeyEvent { keycode, state: key_state } => {
-                                    if let Some(ref focused) = data.state.focused_surface {
+                                    let focused_id = data.state.get_focused_window().map(|w| w.id);
+                                    
+                                    if let Some(window_id) = focused_id {
                                         let wl_state = match key_state {
                                             KeyState::Pressed => WlKeyState::Pressed,
                                             KeyState::Released => WlKeyState::Released,
@@ -361,8 +363,8 @@ fn run_standalone() {
                                         
                                         let serial = data.state.next_keyboard_serial();
                                         for keyboard in &data.state.keyboards {
-                                            log::info!("Forwarding key event to client: keycode={}, state={:?}, serial={}", 
-                                                keycode, wl_state, serial);
+                                            log::info!("Forwarding key event to window {}: keycode={}, state={:?}, serial={}", 
+                                                window_id, keycode, wl_state, serial);
                                             keyboard.key(serial, 0, keycode, wl_state);
                                         }
                                         data.display.flush_clients().ok();
@@ -429,17 +431,31 @@ fn render_frame(
     
     let mut buffers_to_release = Vec::new();
     
-    for (_id, surface_data) in &loop_data.state.surfaces {
-        if let Some(ref wl_buffer) = surface_data.buffer {
+    for window_obj in &loop_data.state.windows {
+        if !window_obj.mapped {
+            continue;
+        }
+        
+        if let Some(ref wl_buffer) = window_obj.buffer {
             if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
                 if let Some(buffer_data) = loop_data.state.buffers.get(&wl_buffer.id().protocol_id()) {
                     let buf_width = buffer_data.width as usize;
                     let buf_height = buffer_data.height as usize;
+                    let win_x = window_obj.geometry.x.max(0) as usize;
+                    let win_y = window_obj.geometry.y.max(0) as usize;
                     
-                    for y in 0..buf_height.min(height) {
-                        for x in 0..buf_width.min(width) {
+                    for y in 0..buf_height.min(height.saturating_sub(win_y)) {
+                        let dst_y = win_y + y;
+                        if dst_y >= height {
+                            break;
+                        }
+                        for x in 0..buf_width.min(width.saturating_sub(win_x)) {
+                            let dst_x = win_x + x;
+                            if dst_x >= width {
+                                break;
+                            }
                             let src_idx = y * buf_width + x;
-                            let dst_idx = y * width + x;
+                            let dst_idx = dst_y * width + dst_x;
                             if src_idx < pixels.len() && dst_idx < buffer.len() {
                                 buffer[dst_idx] = pixels[src_idx];
                             }
@@ -475,24 +491,37 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         unsafe {
             let pixels = std::slice::from_raw_parts_mut(drm.fb_ptr, drm.width * drm.height);
             
-            for pixel in pixels.iter_mut() {
-                *pixel = 0xFF202020;
-            }
+            pixels.fill(0xFF202020);
             
-            for (_id, surface_data) in &state.surfaces {
-                if let Some(ref wl_buffer) = surface_data.buffer {
+            for window in &state.windows {
+                if !window.mapped {
+                    continue;
+                }
+                
+                if let Some(ref wl_buffer) = window.buffer {
                     if let Some(client_pixels) = state.get_buffer_pixels(wl_buffer) {
                         if let Some(buffer_data) = state.buffers.get(&wl_buffer.id().protocol_id()) {
                             let buf_width = buffer_data.width as usize;
                             let buf_height = buffer_data.height as usize;
+                            let win_x = window.geometry.x.max(0) as usize;
+                            let win_y = window.geometry.y.max(0) as usize;
                             
-                            for y in 0..buf_height.min(drm.height) {
-                                for x in 0..buf_width.min(drm.width) {
-                                    let src_idx = y * buf_width + x;
-                                    let dst_idx = y * drm.width + x;
-                                    if src_idx < client_pixels.len() && dst_idx < pixels.len() {
-                                        pixels[dst_idx] = client_pixels[src_idx];
-                                    }
+                            for y in 0..buf_height.min(drm.height.saturating_sub(win_y)) {
+                                let dst_y = win_y + y;
+                                if dst_y >= drm.height {
+                                    break;
+                                }
+                                let src_offset = y * buf_width;
+                                let dst_offset = dst_y * drm.width + win_x;
+                                let copy_width = buf_width.min(drm.width.saturating_sub(win_x));
+                                
+                                if src_offset + copy_width <= client_pixels.len() && 
+                                   dst_offset + copy_width <= pixels.len() {
+                                    std::ptr::copy_nonoverlapping(
+                                        client_pixels.as_ptr().add(src_offset),
+                                        pixels.as_mut_ptr().add(dst_offset),
+                                        copy_width
+                                    );
                                 }
                             }
                         }
@@ -502,16 +531,10 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         }
     }
     
-    let mut buffers_to_release = Vec::new();
-    
-    for (_id, surface_data) in &state.surfaces {
-        if let Some(ref wl_buffer) = surface_data.buffer {
-            buffers_to_release.push(wl_buffer.clone());
+    for window in &state.windows {
+        if let Some(ref wl_buffer) = window.buffer {
+            wl_buffer.release();
         }
-    }
-    
-    for wl_buffer in buffers_to_release {
-        wl_buffer.release();
     }
     
     let time = std::time::SystemTime::now()

@@ -33,9 +33,7 @@ impl Dispatch<WlCompositor, ()> for State {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
                 log::info!("[compositor] CreateSurface");
-                let surface = data_init.init(id, ());
-                let surface_data = _state.get_surface_data(&surface);
-                surface_data.wl_surface = Some(surface);
+                data_init.init(id, ());
             }
             wl_compositor::Request::CreateRegion { id } => {
                 log::info!("[compositor] CreateRegion");
@@ -59,15 +57,18 @@ impl Dispatch<WlSurface, ()> for State {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 log::info!("[surface] Attach buffer: {:?}", buffer.as_ref().map(|b| b.id()));
-                let surface_data = state.get_surface_data(resource);
-                surface_data.pending_buffer = buffer;
+                if let Some(window) = state.get_window_by_surface(resource) {
+                    window.pending_buffer = buffer;
+                }
             }
             wl_surface::Request::Commit => {
                 log::info!("[surface] Commit");
-                let surface_data = state.get_surface_data(resource);
-                if let Some(buffer) = surface_data.pending_buffer.take() {
-                    log::info!("[surface] Committing buffer: {:?}", buffer.id());
-                    surface_data.buffer = Some(buffer);
+                if let Some(window) = state.get_window_by_surface(resource) {
+                    if let Some(buffer) = window.pending_buffer.take() {
+                        log::info!("[surface] Committing buffer: {:?}", buffer.id());
+                        window.buffer = Some(buffer);
+                        window.mapped = true;
+                    }
                 }
             }
             wl_surface::Request::Frame { callback } => {

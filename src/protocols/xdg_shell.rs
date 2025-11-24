@@ -6,7 +6,7 @@ use wayland_protocols::xdg::shell::server::{
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{self, XdgPositioner},
 };
-use crate::state::State;
+use crate::state::{State, Rectangle};
 
 impl GlobalDispatch<XdgWmBase, ()> for State {
     fn bind(
@@ -23,7 +23,7 @@ impl GlobalDispatch<XdgWmBase, ()> for State {
 
 impl Dispatch<XdgWmBase, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &XdgWmBase,
         request: xdg_wm_base::Request,
@@ -38,11 +38,9 @@ impl Dispatch<XdgWmBase, ()> for State {
             }
             xdg_wm_base::Request::GetXdgSurface { id, surface } => {
                 log::info!("[xdg_wm_base] GetXdgSurface for surface {:?}", surface.id());
-                data_init.init(id, ());
-                let surf_id = surface.id().protocol_id();
-                if let Some(surf_data) = _state.surfaces.get_mut(&surf_id) {
-                    surf_data.wl_surface = Some(surface.clone());
-                }
+                let xdg_surface = data_init.init(id, ());
+                let xdg_id = xdg_surface.id().protocol_id();
+                state.pending_xdg_surfaces.insert(xdg_id, (xdg_surface, surface));
             }
             _ => {}
         }
@@ -75,29 +73,31 @@ impl Dispatch<XdgSurface, ()> for State {
             xdg_surface::Request::GetToplevel { id } => {
                 log::info!("[xdg_surface] GetToplevel");
                 let toplevel = data_init.init(id, ());
-                log::info!("[xdg_surface] Sending configure events");
                 
-                let mut found_surface = None;
-                for (_, surf_data) in &state.surfaces {
-                    if let Some(ref surface) = surf_data.wl_surface {
-                        found_surface = Some(surface.clone());
-                        break;
-                    }
-                }
-                
-                if let Some(surface) = found_surface {
-                    log::info!("[xdg_surface] Setting focus to new toplevel surface: {:?}", surface.id());
-                    state.focused_surface = Some(surface.clone());
+                let xdg_id = resource.id().protocol_id();
+                if let Some((xdg_surface, wl_surface)) = state.pending_xdg_surfaces.remove(&xdg_id) {
+                    let window_id = state.add_window(xdg_surface, toplevel.clone(), wl_surface.clone(), 1920, 1080);
+                    log::info!("[xdg_surface] Created window id={}", window_id);
+                    
+                    state.focused_window = Some(window_id);
+                    
+                    let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
+                        (window.geometry.width, window.geometry.height)
+                    } else {
+                        (1920, 1080)
+                    };
                     
                     let serial = state.next_keyboard_serial();
                     for keyboard in &state.keyboards {
-                        log::info!("[xdg_surface] Sending keyboard enter to surface, serial={}", serial);
-                        keyboard.enter(serial, &surface, vec![]);
+                        log::info!("[xdg_surface] Sending keyboard enter to window {}, serial={}", window_id, serial);
+                        keyboard.enter(serial, &wl_surface, vec![]);
                     }
+                    
+                    resource.configure(serial);
+                    toplevel.configure(geometry_width, geometry_height, vec![]);
+                } else {
+                    log::warn!("[xdg_surface] GetToplevel called but no pending XdgSurface found");
                 }
-                
-                resource.configure(1);
-                toplevel.configure(0, 0, vec![]);
             }
             xdg_surface::Request::GetPopup { id, .. } => {
                 log::info!("[xdg_surface] GetPopup");
