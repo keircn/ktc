@@ -159,14 +159,14 @@ fn run_standalone() {
                                 size.try_into().unwrap(),
                                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                                 MapFlags::MAP_SHARED,
-                                fd,
+                                &fb_file,
                                 0,
                             ).ok()
                         };
                         
                         if let Some(ptr) = fb_ptr {
                             Some(FramebufferInfo {
-                                ptr: ptr as *mut u32,
+                                ptr: ptr.as_ptr() as *mut u32,
                                 width: width as usize,
                                 height: height as usize,
                                 line_length: line_length as usize,
