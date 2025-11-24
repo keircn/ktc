@@ -367,18 +367,16 @@ fn run_standalone() {
                                     }
                                 }
                                 InputAction::KeyEvent { keycode, state: key_state } => {
-                                    let focused_id = data.state.get_focused_window().map(|w| w.id);
+                                    let focused_keyboards = data.state.get_focused_keyboards();
                                     
-                                    if let Some(window_id) = focused_id {
+                                    if !focused_keyboards.is_empty() {
                                         let wl_state = match key_state {
                                             KeyState::Pressed => WlKeyState::Pressed,
                                             KeyState::Released => WlKeyState::Released,
                                         };
                                         
                                         let serial = data.state.next_keyboard_serial();
-                                        for keyboard in &data.state.keyboards {
-                                            log::info!("Forwarding key event to window {}: keycode={}, state={:?}, serial={}", 
-                                                window_id, keycode, wl_state, serial);
+                                        for keyboard in focused_keyboards {
                                             keyboard.key(serial, 0, keycode, wl_state);
                                         }
                                         data.display.flush_clients().ok();

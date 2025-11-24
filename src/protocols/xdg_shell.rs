@@ -90,8 +90,12 @@ impl Dispatch<XdgSurface, ()> for State {
                     
                     let serial = state.next_keyboard_serial();
                     for keyboard in &state.keyboards {
-                        log::info!("[xdg_surface] Sending keyboard enter to window {}, serial={}", window_id, serial);
-                        keyboard.enter(serial, &wl_surface, vec![]);
+                        let kb_id = keyboard.id();
+                        if !state.keyboard_to_window.contains_key(&kb_id) {
+                            log::info!("[xdg_surface] Associated keyboard {:?} with window {}", kb_id, window_id);
+                            state.keyboard_to_window.insert(kb_id, window_id);
+                            keyboard.enter(serial, &wl_surface, vec![]);
+                        }
                     }
                     
                     resource.configure(serial);

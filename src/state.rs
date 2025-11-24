@@ -4,6 +4,7 @@ use std::ptr::NonNull;
 use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer};
 use wayland_server::Resource;
 use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
+use wayland_server::backend::ObjectId;
 
 pub type WindowId = u64;
 
@@ -39,6 +40,7 @@ pub struct State {
     pub frame_callbacks: Vec<WlCallback>,
     
     pub keyboards: Vec<WlKeyboard>,
+    pub keyboard_to_window: HashMap<ObjectId, WindowId>,
     pub pointers: Vec<WlPointer>,
     pub keyboard_serial: u32,
     pub pointer_serial: u32,
@@ -85,6 +87,7 @@ impl State {
             buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
             keyboards: Vec::new(),
+            keyboard_to_window: HashMap::new(),
             pointers: Vec::new(),
             keyboard_serial: 0,
             pointer_serial: 0,
@@ -206,6 +209,7 @@ impl State {
         if self.focused_window == Some(id) {
             self.focused_window = self.windows.first().map(|w| w.id);
         }
+        self.keyboard_to_window.retain(|_, window_id| *window_id != id);
     }
     
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
@@ -264,6 +268,21 @@ impl State {
             
             Some(std::slice::from_raw_parts(buffer_start, pixel_count))
         }
+    }
+    
+    pub fn get_focused_keyboards(&self) -> Vec<WlKeyboard> {
+        let focused_id = match self.focused_window {
+            Some(id) => id,
+            None => return vec![],
+        };
+        
+        self.keyboards.iter()
+            .filter(|kb| {
+                let kb_id = kb.id();
+                self.keyboard_to_window.get(&kb_id) == Some(&focused_id)
+            })
+            .cloned()
+            .collect()
     }
 }
 
