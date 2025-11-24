@@ -3,6 +3,7 @@ mod protocols;
 mod input;
 mod logging;
 
+use clap::{Parser, Subcommand};
 use input::{InputAction, KeyState};
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
 use wayland_server::{Display, ListeningSocket, Resource};
@@ -15,28 +16,87 @@ use wayland_server::protocol::{
 };
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use std::sync::Arc;
-
 use state::State;
+
+#[derive(Parser)]
+#[command(name = "ktc")]
+#[command(about = "KTC - Minimal Wayland Tiling Compositor", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    #[command(about = "Start the compositor session")]
+    Start {
+        #[arg(short, long, help = "Force nested mode (run inside existing compositor)")]
+        nested: bool,
+        
+        #[arg(short, long, help = "Force standalone mode (native DRM/KMS)")]
+        standalone: bool,
+    },
+}
 
 fn main() {
     logging::FileLogger::init().expect("Failed to initialize logging");
     
-    let is_nested = std::env::var("WAYLAND_DISPLAY")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .is_some() 
-        || std::env::var("DISPLAY")
-            .ok()
-            .filter(|v| !v.is_empty())
-            .is_some();
+    let cli = Cli::parse();
     
-    if is_nested {
-        log::info!("Running in nested mode (client of existing compositor)");
-        run_nested();
-    } else {
-        log::info!("Running in standalone mode (native compositor)");
-        run_standalone();
+    match cli.command {
+        Some(Commands::Start { nested, standalone }) => {
+            if nested && standalone {
+                eprintln!("Error: Cannot specify both --nested and --standalone");
+                std::process::exit(1);
+            }
+            
+            let is_nested = if nested {
+                true
+            } else if standalone {
+                false
+            } else {
+                std::env::var("WAYLAND_DISPLAY")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .is_some() 
+                    || std::env::var("DISPLAY")
+                        .ok()
+                        .filter(|v| !v.is_empty())
+                        .is_some()
+            };
+            
+            if is_nested {
+                log::info!("Running in nested mode (client of existing compositor)");
+                run_nested();
+            } else {
+                log::info!("Running in standalone mode (native compositor)");
+                run_standalone();
+            }
+        }
+        None => {
+            print_help();
+        }
     }
+}
+
+fn print_help() {
+    println!("KTC - Minimal Wayland Tiling Compositor\n");
+    println!("USAGE:");
+    println!("    ktc start [OPTIONS]    Start the compositor session");
+    println!();
+    println!("OPTIONS:");
+    println!("    -n, --nested          Force nested mode (run inside existing compositor)");
+    println!("    -s, --standalone      Force standalone mode (native DRM/KMS)");
+    println!();
+    println!("EXAMPLES:");
+    println!("    ktc start             Auto-detect mode and start compositor");
+    println!("    ktc start --nested    Start in nested mode for testing");
+    println!("    sudo ktc start        Start from TTY as native compositor");
+    println!();
+    println!("KEYBINDS:");
+    println!("    Ctrl+Alt+Q           Exit compositor");
+    println!("    Alt+T                Launch terminal (ghostty)");
+}
 }
 
 fn setup_wayland() -> (Display<State>, ListeningSocket) {
