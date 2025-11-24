@@ -1,4 +1,4 @@
-use wayland_server::{Display, GlobalDispatch, ListeningSocket};
+use wayland_server::{Display, GlobalDispatch, ListeningSocket, Resource};
 use wayland_server::protocol::{
     wl_compositor::{self, WlCompositor},
     wl_surface::{self, WlSurface},
