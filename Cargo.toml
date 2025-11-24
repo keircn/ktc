@@ -13,3 +13,5 @@ libc = "0.2"
 nix = { version = "0.29", features = ["fs", "ioctl", "mman"] }
 drm = "0.14"
 gbm = "0.15"
+input = { version = "0.9", features = ["libinput_1_21"] }
+xkbcommon = "0.8"

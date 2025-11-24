@@ -1,5 +1,6 @@
 mod state;
 mod protocols;
+mod input;
 
 use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
@@ -137,6 +138,7 @@ fn run_nested() {
 
 fn run_standalone() {
     use std::fs::OpenOptions;
+    use input::{InputHandler, InputAction};
     
     let (mut display, socket) = setup_wayland();
 
@@ -167,6 +169,18 @@ fn run_standalone() {
             eprintln!("Failed to open DRM device: {}", e);
             eprintln!("Running in headless mode (no display output)");
             eprintln!("To see client windows, run this compositor in nested mode instead.");
+            None
+        }
+    };
+
+    let input_handler = match InputHandler::new() {
+        Ok(handler) => {
+            eprintln!("Input handler initialized");
+            Some(handler)
+        }
+        Err(e) => {
+            eprintln!("Failed to initialize input handler: {}", e);
+            eprintln!("Input will not be available");
             None
         }
     };
@@ -211,6 +225,46 @@ fn run_standalone() {
         )
         .expect("Failed to insert display source");
 
+    if let Some(ref handler) = input_handler {
+        let input_fd = handler.as_fd().try_clone_to_owned()
+            .expect("Failed to clone input fd");
+        
+        calloop_loop
+            .handle()
+            .insert_source(
+                calloop::generic::Generic::new(
+                    input_fd,
+                    calloop::Interest::READ,
+                    calloop::Mode::Level,
+                ),
+                |_, _, data| {
+                    if let Some(ref mut handler) = data.input_handler {
+                        handler.dispatch().ok();
+                        let mut should_exit = false;
+                        
+                        handler.process_events(|action| {
+                            match action {
+                                InputAction::ExitCompositor => {
+                                    eprintln!("Ctrl+Alt+Delete pressed, exiting compositor");
+                                    should_exit = true;
+                                }
+                                InputAction::LaunchTerminal => {
+                                    eprintln!("Alt+T pressed, launching ghostty");
+                                    std::process::Command::new("ghostty").spawn().ok();
+                                }
+                            }
+                        });
+                        
+                        if should_exit {
+                            std::process::exit(0);
+                        }
+                    }
+                    Ok(calloop::PostAction::Continue)
+                },
+            )
+            .expect("Failed to insert input source");
+    }
+
     let _timer = calloop_loop.handle()
         .insert_source(
             calloop::timer::Timer::immediate(),
@@ -225,9 +279,10 @@ fn run_standalone() {
         display,
         state: State::new(),
         drm_info,
+        input_handler,
     };
 
-    println!("Compositor running in standalone mode. Press Ctrl+C to exit.");
+    println!("Compositor running in standalone mode. Press Ctrl+Alt+Delete to exit.");
     
     loop {
         calloop_loop.dispatch(None, &mut loop_data).expect("Event loop error");
@@ -363,6 +418,7 @@ struct StandaloneLoopData {
     display: Display<State>,
     state: State,
     drm_info: Option<DrmInfo>,
+    input_handler: Option<input::InputHandler>,
 }
 
 struct DrmInfo {
