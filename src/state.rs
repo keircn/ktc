@@ -1,19 +1,180 @@
 use std::collections::HashMap;
 use std::os::fd::{OwnedFd, AsFd, AsRawFd};
 use std::ptr::NonNull;
-use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer};
+use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer, wl_output::WlOutput};
 use wayland_server::Resource;
 use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
 use wayland_server::backend::ObjectId;
 
 pub type WindowId = u64;
+pub type OutputId = u64;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Rectangle {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Output {
+    pub id: OutputId,
+    pub name: String,
+    pub make: String,
+    pub model: String,
+    pub x: i32,
+    pub y: i32,
+    pub physical_width: i32,
+    pub physical_height: i32,
+    pub width: i32,
+    pub height: i32,
+    pub refresh: i32,
+    pub scale: i32,
+    pub transform: OutputTransform,
+    pub wl_outputs: Vec<WlOutput>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputTransform {
+    #[default]
+    Normal,
+    Rotate90,
+    Rotate180,
+    Rotate270,
+    Flipped,
+    FlippedRotate90,
+    FlippedRotate180,
+    FlippedRotate270,
+}
+
+impl Output {
+    pub fn new(id: OutputId, name: String, width: i32, height: i32) -> Self {
+        Self {
+            id,
+            name,
+            make: "Unknown".to_string(),
+            model: "Unknown".to_string(),
+            x: 0,
+            y: 0,
+            physical_width: 0,
+            physical_height: 0,
+            width,
+            height,
+            refresh: 60000,
+            scale: 1,
+            transform: OutputTransform::Normal,
+            wl_outputs: Vec::new(),
+        }
+    }
+
+    pub fn usable_area(&self) -> Rectangle {
+        Rectangle {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
+    pub fn scaled_size(&self) -> (i32, i32) {
+        (self.width / self.scale, self.height / self.scale)
+    }
+}
+
+pub struct Canvas {
+    pub pixels: Vec<u32>,
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
+}
+
+impl Canvas {
+    pub fn new(width: usize, height: usize) -> Self {
+        let stride = width;
+        let pixels = vec![0xFF202020; width * height];
+        Self {
+            pixels,
+            width,
+            height,
+            stride,
+        }
+    }
+
+    pub fn resize(&mut self, width: usize, height: usize) {
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.stride = width;
+            self.pixels = vec![0xFF202020; width * height];
+        }
+    }
+
+    pub fn clear(&mut self, color: u32) {
+        self.pixels.fill(color);
+    }
+
+    pub fn blit(&mut self, src: &[u32], src_width: usize, src_height: usize, dst_x: i32, dst_y: i32) {
+        let dst_x = dst_x.max(0) as usize;
+        let dst_y = dst_y.max(0) as usize;
+
+        for y in 0..src_height {
+            let dst_row = dst_y + y;
+            if dst_row >= self.height {
+                break;
+            }
+
+            for x in 0..src_width {
+                let dst_col = dst_x + x;
+                if dst_col >= self.width {
+                    break;
+                }
+
+                let src_idx = y * src_width + x;
+                let dst_idx = dst_row * self.stride + dst_col;
+
+                if src_idx < src.len() && dst_idx < self.pixels.len() {
+                    self.pixels[dst_idx] = src[src_idx];
+                }
+            }
+        }
+    }
+
+    pub fn blit_fast(&mut self, src: &[u32], src_width: usize, src_height: usize, dst_x: i32, dst_y: i32) {
+        let dst_x = dst_x.max(0) as usize;
+        let dst_y = dst_y.max(0) as usize;
+
+        for y in 0..src_height.min(self.height.saturating_sub(dst_y)) {
+            let dst_row = dst_y + y;
+            let src_offset = y * src_width;
+            let dst_offset = dst_row * self.stride + dst_x;
+            let copy_width = src_width.min(self.width.saturating_sub(dst_x));
+
+            if src_offset + copy_width <= src.len() && dst_offset + copy_width <= self.pixels.len() {
+                self.pixels[dst_offset..dst_offset + copy_width]
+                    .copy_from_slice(&src[src_offset..src_offset + copy_width]);
+            }
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u32] {
+        &self.pixels
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u32] {
+        &mut self.pixels
+    }
+}
+
+#[derive(Default)]
+pub struct OutputConfig {
+    pub make: Option<String>,
+    pub model: Option<String>,
+    pub physical_size: Option<(i32, i32)>,
+    pub resolution: Option<(i32, i32)>,
+    pub refresh: Option<i32>,
+    pub scale: Option<i32>,
+    pub transform: Option<OutputTransform>,
 }
 
 pub struct Window {
@@ -31,14 +192,15 @@ pub struct State {
     pub windows: Vec<Window>,
     pub focused_window: Option<WindowId>,
     pub next_window_id: WindowId,
-    
-    pub screen_width: i32,
-    pub screen_height: i32,
-    
+    pub outputs: Vec<Output>,
+    pub next_output_id: OutputId,
+    pub canvas: Canvas,
+
     pub shm_pools: HashMap<u32, ShmPoolData>,
     pub buffers: HashMap<u32, BufferData>,
+
     pub frame_callbacks: Vec<WlCallback>,
-    
+
     pub keyboards: Vec<WlKeyboard>,
     pub keyboard_to_window: HashMap<ObjectId, WindowId>,
     pub pointers: Vec<WlPointer>,
@@ -77,12 +239,16 @@ pub struct BufferData {
 
 impl State {
     pub fn new() -> Self {
+        let default_width = 1920;
+        let default_height = 1080;
+        
         Self {
             windows: Vec::new(),
             focused_window: None,
             next_window_id: 1,
-            screen_width: 1920,
-            screen_height: 1080,
+            outputs: Vec::new(),
+            next_output_id: 1,
+            canvas: Canvas::new(default_width, default_height),
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
@@ -95,9 +261,135 @@ impl State {
         }
     }
     
+    pub fn add_output(&mut self, name: String, width: i32, height: i32) -> OutputId {
+        let id = self.next_output_id;
+        self.next_output_id += 1;
+        
+        let output = Output::new(id, name, width, height);
+        self.outputs.push(output);
+        
+        if self.outputs.len() == 1 {
+            self.canvas.resize(width as usize, height as usize);
+        }
+        
+        self.relayout_windows();
+        
+        id
+    }
+    
+    pub fn configure_output(&mut self, id: OutputId, config: OutputConfig) {
+        let is_primary = self.outputs.first().map(|o| o.id) == Some(id);
+        
+        let (new_width, new_height) = {
+            if let Some(output) = self.outputs.iter_mut().find(|o| o.id == id) {
+                if let Some(make) = config.make {
+                    output.make = make;
+                }
+                if let Some(model) = config.model {
+                    output.model = model;
+                }
+                if let Some((w, h)) = config.physical_size {
+                    output.physical_width = w;
+                    output.physical_height = h;
+                }
+                if let Some((w, h)) = config.resolution {
+                    output.width = w;
+                    output.height = h;
+                }
+                if let Some(refresh) = config.refresh {
+                    output.refresh = refresh;
+                }
+                if let Some(scale) = config.scale {
+                    output.scale = scale;
+                }
+                if let Some(transform) = config.transform {
+                    output.transform = transform;
+                }
+                
+                (output.width, output.height)
+            } else {
+                return;
+            }
+        };
+        
+        if is_primary {
+            self.canvas.resize(new_width as usize, new_height as usize);
+        }
+        
+        self.send_output_configuration(id);
+    }
+    
+    fn send_output_configuration(&self, id: OutputId) {
+        use wayland_server::protocol::wl_output::{Mode, Subpixel, Transform};
+        
+        if let Some(output) = self.outputs.iter().find(|o| o.id == id) {
+            let transform = match output.transform {
+                OutputTransform::Normal => Transform::Normal,
+                OutputTransform::Rotate90 => Transform::_90,
+                OutputTransform::Rotate180 => Transform::_180,
+                OutputTransform::Rotate270 => Transform::_270,
+                OutputTransform::Flipped => Transform::Flipped,
+                OutputTransform::FlippedRotate90 => Transform::Flipped90,
+                OutputTransform::FlippedRotate180 => Transform::Flipped180,
+                OutputTransform::FlippedRotate270 => Transform::Flipped270,
+            };
+            
+            for wl_output in &output.wl_outputs {
+                wl_output.geometry(
+                    output.x,
+                    output.y,
+                    output.physical_width,
+                    output.physical_height,
+                    Subpixel::Unknown,
+                    output.make.clone(),
+                    output.model.clone(),
+                    transform,
+                );
+                wl_output.mode(
+                    Mode::Current | Mode::Preferred,
+                    output.width,
+                    output.height,
+                    output.refresh,
+                );
+                if wl_output.version() >= 2 {
+                    wl_output.done();
+                }
+                if wl_output.version() >= 4 {
+                    wl_output.name(output.name.clone());
+                }
+            }
+        }
+    }
+    
+    pub fn register_wl_output(&mut self, wl_output: WlOutput) {
+        if let Some(output) = self.outputs.first_mut() {
+            output.wl_outputs.push(wl_output);
+            let id = output.id;
+            self.send_output_configuration(id);
+        }
+    }
+    
+    pub fn primary_output(&self) -> Option<&Output> {
+        self.outputs.first()
+    }
+    
+    pub fn screen_size(&self) -> (i32, i32) {
+        self.primary_output()
+            .map(|o| (o.width, o.height))
+            .unwrap_or((1920, 1080))
+    }
+    
     pub fn set_screen_size(&mut self, width: i32, height: i32) {
-        self.screen_width = width;
-        self.screen_height = height;
+        if self.outputs.is_empty() {
+            self.add_output("default".to_string(), width, height);
+        } else if let Some(output) = self.outputs.first_mut() {
+            output.width = width;
+            output.height = height;
+            self.canvas.resize(width as usize, height as usize);
+            let id = output.id;
+            self.send_output_configuration(id);
+        }
+        self.relayout_windows();
     }
     
     pub fn next_keyboard_serial(&mut self) -> u32 {
@@ -114,8 +406,9 @@ impl State {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
+        let (screen_width, screen_height) = self.screen_size();
         let num_windows = self.windows.len();
-        let geometry = calculate_tiling_geometry(num_windows, self.screen_width, self.screen_height);
+        let geometry = calculate_tiling_geometry(num_windows, screen_width, screen_height);
         
         self.windows.push(Window {
             id,
@@ -139,8 +432,7 @@ impl State {
             return;
         }
         
-        let screen_width = self.screen_width;
-        let screen_height = self.screen_height;
+        let (screen_width, screen_height) = self.screen_size();
         
         for (i, window) in self.windows.iter_mut().enumerate() {
             window.geometry = calculate_tiling_geometry(i, screen_width, screen_height);

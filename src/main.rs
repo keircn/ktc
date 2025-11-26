@@ -200,7 +200,12 @@ fn run_nested() {
         state: State::new(),
     };
     
-    loop_data.state.set_screen_size(1920, 1080);
+    let initial_size = window.inner_size();
+    loop_data.state.add_output(
+        "nested".to_string(),
+        initial_size.width as i32,
+        initial_size.height as i32
+    );
 
     winit_loop.run(move |event, target| {
         target.set_control_flow(ControlFlow::Poll);
@@ -414,9 +419,24 @@ fn run_standalone() {
     };
     
     if let Some(ref drm) = loop_data.drm_info {
-        loop_data.state.set_screen_size(drm.width as i32, drm.height as i32);
+        use state::OutputConfig;
+        let output_id = loop_data.state.add_output(
+            drm.name.clone(),
+            drm.width as i32,
+            drm.height as i32
+        );
+        
+        loop_data.state.configure_output(output_id, OutputConfig {
+            make: Some("DRM".to_string()),
+            model: Some(drm.name.clone()),
+            physical_size: Some((drm.physical_width as i32, drm.physical_height as i32)),
+            refresh: Some(drm.refresh),
+            ..Default::default()
+        });
+        
+        log::info!("Configured output {} at {}x{}", drm.name, drm.width, drm.height);
     } else {
-        loop_data.state.set_screen_size(1366, 768);
+        loop_data.state.add_output("headless".to_string(), 1366, 768);
     }
 
     log::info!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
@@ -436,62 +456,38 @@ fn render_frame(
         (size.width as usize, size.height as usize)
     };
     
+    loop_data.state.canvas.resize(width, height);
+    if loop_data.state.screen_size() != (width as i32, height as i32) {
+        loop_data.state.set_screen_size(width as i32, height as i32);
+    }
+    
     surface.resize(
         std::num::NonZeroU32::new(width as u32).unwrap(),
         std::num::NonZeroU32::new(height as u32).unwrap(),
     ).ok();
 
-    let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
-    
-    buffer.fill(0xFF202020);
-    
+    loop_data.state.canvas.clear(0xFF202020);
     let mut buffers_to_release = Vec::new();
-    
-    let num_windows = loop_data.state.windows.len();
-    for i in 0..num_windows {
-        if !loop_data.state.windows[i].mapped {
-            continue;
-        }
-        
-        let window_obj = &loop_data.state.windows[i];
-        let geometry = window_obj.geometry;
-        let wl_buffer_opt = window_obj.buffer.clone();
-        
-        if let Some(wl_buffer) = wl_buffer_opt {
+    let window_infos: Vec<_> = loop_data.state.windows.iter()
+        .filter(|w| w.mapped)
+        .filter_map(|w| {
+            let wl_buffer = w.buffer.clone()?;
             let buffer_id = wl_buffer.id().protocol_id();
-            let (buf_width, buf_height) = if let Some(buffer_data) = loop_data.state.buffers.get(&buffer_id) {
-                (buffer_data.width as usize, buffer_data.height as usize)
-            } else {
-                continue;
-            };
-            
-            if let Some(pixels) = loop_data.state.get_buffer_pixels(&wl_buffer) {
-                let win_x = geometry.x.max(0) as usize;
-                let win_y = geometry.y.max(0) as usize;
-                
-                for y in 0..buf_height.min(height.saturating_sub(win_y)) {
-                    let dst_y = win_y + y;
-                    if dst_y >= height {
-                        break;
-                    }
-                    for x in 0..buf_width.min(width.saturating_sub(win_x)) {
-                        let dst_x = win_x + x;
-                        if dst_x >= width {
-                            break;
-                        }
-                        let src_idx = y * buf_width + x;
-                        let dst_idx = dst_y * width + dst_x;
-                        if src_idx < pixels.len() && dst_idx < buffer.len() {
-                            buffer[dst_idx] = pixels[src_idx];
-                        }
-                    }
-                }
-                
-                buffers_to_release.push(wl_buffer);
-            }
+            let buffer_data = loop_data.state.buffers.get(&buffer_id)?;
+            Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize))
+        })
+        .collect();
+    
+    for (geometry, wl_buffer, buf_width, buf_height) in window_infos {
+        if let Some(pixels) = loop_data.state.get_buffer_pixels(&wl_buffer) {
+            let pixels_copy: Vec<u32> = pixels.to_vec();
+            loop_data.state.canvas.blit_fast(&pixels_copy, buf_width, buf_height, geometry.x, geometry.y);
+            buffers_to_release.push(wl_buffer);
         }
     }
     
+    let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
+    buffer.copy_from_slice(loop_data.state.canvas.as_slice());
     buffer.present().ok();
     
     for wl_buffer in buffers_to_release {
@@ -511,52 +507,42 @@ fn render_frame(
 }
 
 fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
+    state.canvas.clear(0xFF202020);
+    let window_infos: Vec<_> = state.windows.iter()
+        .filter(|w| w.mapped)
+        .filter_map(|w| {
+            let wl_buffer = w.buffer.clone()?;
+            let buffer_id = wl_buffer.id().protocol_id();
+            let buffer_data = state.buffers.get(&buffer_id)?;
+            Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize))
+        })
+        .collect();
+    
+    for (geometry, wl_buffer, buf_width, buf_height) in window_infos {
+        if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
+            let pixels_copy: Vec<u32> = client_pixels.to_vec();
+            state.canvas.blit_fast(&pixels_copy, buf_width, buf_height, geometry.x, geometry.y);
+        }
+    }
+    
     if let Some(drm) = drm_info {
         unsafe {
-            let pixels = std::slice::from_raw_parts_mut(drm.fb_ptr, drm.width * drm.height);
+            let fb_pixels = std::slice::from_raw_parts_mut(drm.fb_ptr, drm.width * drm.height);
+            let canvas_pixels = state.canvas.as_slice();
+            let copy_height = state.canvas.height.min(drm.height);
+            let copy_width = state.canvas.width.min(drm.width);
             
-            pixels.fill(0xFF202020);
-            
-            let num_windows = state.windows.len();
-            for i in 0..num_windows {
-                if !state.windows[i].mapped {
-                    continue;
-                }
+            for y in 0..copy_height {
+                let src_offset = y * state.canvas.stride;
+                let dst_offset = y * drm.width;
                 
-                let geometry = state.windows[i].geometry;
-                let wl_buffer_opt = state.windows[i].buffer.clone();
-                
-                if let Some(wl_buffer) = wl_buffer_opt {
-                    let buffer_id = wl_buffer.id().protocol_id();
-                    let (buf_width, buf_height) = if let Some(buffer_data) = state.buffers.get(&buffer_id) {
-                        (buffer_data.width as usize, buffer_data.height as usize)
-                    } else {
-                        continue;
-                    };
-                    
-                    if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
-                        let win_x = geometry.x.max(0) as usize;
-                        let win_y = geometry.y.max(0) as usize;
-                        
-                        for y in 0..buf_height.min(drm.height.saturating_sub(win_y)) {
-                            let dst_y = win_y + y;
-                            if dst_y >= drm.height {
-                                break;
-                            }
-                            let src_offset = y * buf_width;
-                            let dst_offset = dst_y * drm.width + win_x;
-                            let copy_width = buf_width.min(drm.width.saturating_sub(win_x));
-                            
-                            if src_offset + copy_width <= client_pixels.len() && 
-                               dst_offset + copy_width <= pixels.len() {
-                                std::ptr::copy_nonoverlapping(
-                                    client_pixels.as_ptr().add(src_offset),
-                                    pixels.as_mut_ptr().add(dst_offset),
-                                    copy_width
-                                );
-                            }
-                        }
-                    }
+                if src_offset + copy_width <= canvas_pixels.len() && 
+                   dst_offset + copy_width <= fb_pixels.len() {
+                    std::ptr::copy_nonoverlapping(
+                        canvas_pixels.as_ptr().add(src_offset),
+                        fb_pixels.as_mut_ptr().add(dst_offset),
+                        copy_width
+                    );
                 }
             }
         }
@@ -601,6 +587,10 @@ struct DrmInfo {
     height: usize,
     fb_id: u32,
     _crtc: drm::control::crtc::Handle,
+    physical_width: u32,
+    physical_height: u32,
+    refresh: i32,
+    name: String,
 }
 
 unsafe impl Send for DrmInfo {}
@@ -631,11 +621,18 @@ fn setup_drm(device: &std::fs::File) -> Result<DrmInfo, Box<dyn std::error::Erro
         .find(|c| c.state() == connector::State::Connected)
         .ok_or("No connected display found")?;
     
+    let connector_name = format!("{:?}-{}", connector.interface(), connector.interface_id());
+    
     let mode = connector.modes().first()
         .ok_or("No display mode available")?;
     
     let (width, height) = mode.size();
-    log::info!("Using display mode: {}x{}", width, height);
+    let refresh = mode.vrefresh() as i32 * 1000;
+    
+    let (phys_width, phys_height) = connector.size().unwrap_or((0, 0));
+    
+    log::info!("Using display mode: {}x{} @{}Hz (physical: {}x{}mm) on {}", 
+        width, height, mode.vrefresh(), phys_width, phys_height, connector_name);
     
     let crtc_handle = res.crtcs().first()
         .copied()
@@ -660,6 +657,10 @@ fn setup_drm(device: &std::fs::File) -> Result<DrmInfo, Box<dyn std::error::Erro
         height: height as usize,
         fb_id: fb_handle.into(),
         _crtc: crtc_handle,
+        physical_width: phys_width,
+        physical_height: phys_height,
+        refresh,
+        name: connector_name,
     })
 }
 

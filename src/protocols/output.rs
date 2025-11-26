@@ -1,4 +1,4 @@
-use wayland_server::{GlobalDispatch, Dispatch, Resource};
+use wayland_server::{GlobalDispatch, Dispatch};
 use wayland_server::protocol::{
     wl_output::{self, WlOutput},
     wl_shm::{self, WlShm},
@@ -9,7 +9,7 @@ use crate::state::State;
 
 impl GlobalDispatch<WlOutput, ()> for State {
     fn bind(
-        _state: &mut Self,
+        state: &mut Self,
         _handle: &wayland_server::DisplayHandle,
         _client: &wayland_server::Client,
         resource: wayland_server::New<WlOutput>,
@@ -17,12 +17,8 @@ impl GlobalDispatch<WlOutput, ()> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         let output = data_init.init(resource, ());
-        output.geometry(0, 0, 1920, 1080, wl_output::Subpixel::Unknown,
-            "Minimal".into(), "Compositor".into(), wl_output::Transform::Normal);
-        output.mode(wl_output::Mode::Current | wl_output::Mode::Preferred, 1920, 1080, 60000);
-        if output.version() >= 2 {
-            output.done();
-        }
+        
+        state.register_wl_output(output);
     }
 }
 

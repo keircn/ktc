@@ -85,7 +85,7 @@ impl Dispatch<XdgSurface, ()> for State {
                     let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
                         (window.geometry.width, window.geometry.height)
                     } else {
-                        (state.screen_width, state.screen_height)
+                        state.screen_size()
                     };
                     
                     let serial = state.next_keyboard_serial();
