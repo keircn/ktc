@@ -76,10 +76,8 @@ impl Dispatch<XdgSurface, ()> for State {
                 
                 let xdg_id = resource.id().protocol_id();
                 if let Some((xdg_surface, wl_surface)) = state.pending_xdg_surfaces.remove(&xdg_id) {
-                    let window_id = state.add_window(xdg_surface, toplevel.clone(), wl_surface);
+                    let window_id = state.add_window_without_relayout(xdg_surface, toplevel.clone(), wl_surface);
                     log::info!("[xdg_surface] Created window id={}", window_id);
-                    
-                    state.set_focus(window_id);
                     
                     let tiling_states = state.get_toplevel_states(window_id);
                     let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
@@ -88,9 +86,11 @@ impl Dispatch<XdgSurface, ()> for State {
                         state.screen_size()
                     };
                     
+                    toplevel.configure(geometry_width, geometry_height, tiling_states);
                     let serial = state.next_keyboard_serial();
                     resource.configure(serial);
-                    toplevel.configure(geometry_width, geometry_height, tiling_states);
+                    state.set_focus_without_relayout(window_id);
+                    state.relayout_windows();
                 } else {
                     log::warn!("[xdg_surface] GetToplevel called but no pending XdgSurface found");
                 }

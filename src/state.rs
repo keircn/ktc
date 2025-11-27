@@ -520,6 +520,12 @@ impl State {
     }
     
     pub fn add_window(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface) -> WindowId {
+        let id = self.add_window_without_relayout(xdg_surface, xdg_toplevel, wl_surface);
+        self.relayout_windows();
+        id
+    }
+    
+    pub fn add_window_without_relayout(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface) -> WindowId {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
@@ -537,8 +543,6 @@ impl State {
             buffer: None,
             pending_buffer: None,
         });
-        
-        self.relayout_windows();
         
         id
     }
@@ -666,6 +670,11 @@ impl State {
     }
     
     pub fn set_focus(&mut self, window_id: WindowId) {
+        self.set_focus_without_relayout(window_id);
+        self.relayout_windows();
+    }
+    
+    pub fn set_focus_without_relayout(&mut self, window_id: WindowId) {
         let old_focused = self.focused_window;
         
         if old_focused == Some(window_id) {
@@ -694,8 +703,6 @@ impl State {
                 self.keyboard_to_window.insert(kb_id, window_id);
             }
         }
-        
-        self.relayout_windows();
         
         log::info!("Focus changed to window {}", window_id);
     }
