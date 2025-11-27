@@ -514,19 +514,17 @@ fn render_frame(
     if !window_infos.is_empty() {
         loop_data.state.canvas.clear_with_pattern();
         
-        for (_, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+        for (_, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
             if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(wl_buffer) {
                 let pixels_copy: Vec<u32> = pixels.to_vec();
                 loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, geometry.y);
                 buffers_to_release.push(wl_buffer.clone());
                 has_damage = true;
+                
+                let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
+                let thickness = if *is_focused { 3 } else { 1 };
+                loop_data.state.canvas.draw_border(geometry.x, geometry.y, *buf_width as i32, *buf_height as i32, border_color, thickness);
             }
-        }
-        
-        for (_, geometry, _, _, _, is_focused) in &window_infos {
-            let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
-            let thickness = if *is_focused { 3 } else { 1 };
-            loop_data.state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
         }
     } else if loop_data.state.windows.is_empty() {
         loop_data.state.canvas.clear_with_pattern();
@@ -593,10 +591,10 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             }
         }
         
-        for (_, geometry, _, _, _, is_focused) in &window_infos {
+        for (_, geometry, _, buf_width, buf_height, is_focused) in &window_infos {
             let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
             let thickness = if *is_focused { 3 } else { 1 };
-            state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
+            state.canvas.draw_border(geometry.x, geometry.y, *buf_width as i32, *buf_height as i32, border_color, thickness);
         }
     } else if state.windows.is_empty() {
         state.canvas.clear_with_pattern();
