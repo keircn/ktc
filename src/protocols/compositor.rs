@@ -5,7 +5,7 @@ use wayland_server::protocol::{
     wl_callback::WlCallback,
     wl_region::{self, WlRegion},
 };
-use crate::state::State;
+use crate::state::{State, TITLE_BAR_HEIGHT};
 
 impl GlobalDispatch<WlCompositor, ()> for State {
     fn bind(
@@ -64,16 +64,51 @@ impl Dispatch<WlSurface, ()> for State {
                 }
             }
             wl_surface::Request::Commit => {
+                let surface_id = resource.id();
                 if let Some(window) = state.get_window_by_surface(resource) {
+                    let mut buffer_changed = false;
                     if let Some(buffer) = window.pending_buffer.take() {
+                        let new_buffer_id = buffer.id().protocol_id();
+                        buffer_changed = window.last_buffer_id != new_buffer_id;
+                        window.last_buffer_id = new_buffer_id;
                         window.buffer = Some(buffer);
                     }
+                    let was_mapped = window.mapped;
                     window.mapped = window.buffer.is_some();
+                    
+                    if buffer_changed || !was_mapped {
+                        window.needs_redraw = true;
+                    }
                 }
+                state.mark_surface_damage(surface_id);
             }
             wl_surface::Request::Frame { callback } => {
                 let cb = data_init.init(callback, ());
                 state.frame_callbacks.push(cb);
+            }
+            wl_surface::Request::Damage { x, y, width, height } => {
+                if let Some(window) = state.get_window_by_surface(resource) {
+                    let g = window.geometry;
+                    state.damage_tracker.add_damage(crate::state::Rectangle {
+                        x: g.x + x,
+                        y: g.y + TITLE_BAR_HEIGHT + y,
+                        width,
+                        height,
+                    });
+                    window.needs_redraw = true;
+                }
+            }
+            wl_surface::Request::DamageBuffer { x, y, width, height } => {
+                if let Some(window) = state.get_window_by_surface(resource) {
+                    let g = window.geometry;
+                    state.damage_tracker.add_damage(crate::state::Rectangle {
+                        x: g.x + x,
+                        y: g.y + TITLE_BAR_HEIGHT + y,
+                        width,
+                        height,
+                    });
+                    window.needs_redraw = true;
+                }
             }
             wl_surface::Request::Destroy => {
                 let surface_id = resource.id();

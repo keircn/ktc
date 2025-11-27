@@ -12,12 +12,106 @@ pub type OutputId = u64;
 
 pub const TITLE_BAR_HEIGHT: i32 = 24;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rectangle {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+impl Rectangle {
+    pub fn union(&self, other: &Rectangle) -> Rectangle {
+        if self.width == 0 || self.height == 0 {
+            return *other;
+        }
+        if other.width == 0 || other.height == 0 {
+            return *self;
+        }
+        let x1 = self.x.min(other.x);
+        let y1 = self.y.min(other.y);
+        let x2 = (self.x + self.width).max(other.x + other.width);
+        let y2 = (self.y + self.height).max(other.y + other.height);
+        Rectangle { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
+    }
+
+    pub fn intersects(&self, other: &Rectangle) -> bool {
+        self.x < other.x + other.width
+            && self.x + self.width > other.x
+            && self.y < other.y + other.height
+            && self.y + self.height > other.y
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.width <= 0 || self.height <= 0
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct DamageTracker {
+    regions: Vec<Rectangle>,
+    full_damage: bool,
+    frame_count: u64,
+    last_damage_frame: u64,
+}
+
+impl DamageTracker {
+    pub fn new() -> Self {
+        Self {
+            regions: Vec::with_capacity(16),
+            full_damage: true,
+            frame_count: 0,
+            last_damage_frame: 0,
+        }
+    }
+
+    pub fn add_damage(&mut self, rect: Rectangle) {
+        if rect.is_empty() {
+            return;
+        }
+        self.last_damage_frame = self.frame_count;
+        if self.regions.len() >= 16 {
+            self.full_damage = true;
+            self.regions.clear();
+        } else {
+            self.regions.push(rect);
+        }
+    }
+
+    pub fn mark_full_damage(&mut self) {
+        self.full_damage = true;
+        self.regions.clear();
+        self.last_damage_frame = self.frame_count;
+    }
+
+    pub fn has_damage(&self) -> bool {
+        self.full_damage || !self.regions.is_empty()
+    }
+
+    pub fn is_full_damage(&self) -> bool {
+        self.full_damage
+    }
+
+    pub fn damage_regions(&self) -> &[Rectangle] {
+        &self.regions
+    }
+
+    pub fn clear(&mut self) {
+        self.regions.clear();
+        self.full_damage = false;
+        self.frame_count += 1;
+    }
+
+    pub fn merged_damage(&self, screen_width: i32, screen_height: i32) -> Rectangle {
+        if self.full_damage {
+            return Rectangle { x: 0, y: 0, width: screen_width, height: screen_height };
+        }
+        let mut result = Rectangle::default();
+        for r in &self.regions {
+            result = result.union(r);
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -361,6 +455,8 @@ pub struct Window {
     pub mapped: bool,
     pub buffer: Option<WlBuffer>,
     pub pending_buffer: Option<WlBuffer>,
+    pub needs_redraw: bool,
+    pub last_buffer_id: u32,
 }
 
 pub struct State {
@@ -398,6 +494,10 @@ pub struct State {
     pub needs_relayout: bool,
     
     pub screencopy_frames: Vec<PendingScreencopy>,
+
+    pub damage_tracker: DamageTracker,
+    pub last_cursor_pos: (i32, i32),
+    pub pending_surface_commits: Vec<ObjectId>,
 }
 
 impl Drop for State {
@@ -476,6 +576,9 @@ impl State {
             pending_xdg_surfaces: HashMap::new(),
             needs_relayout: false,
             screencopy_frames: Vec::new(),
+            damage_tracker: DamageTracker::new(),
+            last_cursor_pos: (0, 0),
+            pending_surface_commits: Vec::new(),
         }
     }
     
@@ -651,7 +754,16 @@ impl State {
             let id = output.id;
             self.send_output_configuration(id);
         }
+        self.damage_tracker.mark_full_damage();
         self.relayout_windows();
+    }
+    
+    pub fn mark_surface_damage(&mut self, surface_id: ObjectId) {
+        if let Some(window) = self.windows.iter_mut().find(|w| w.wl_surface.id() == surface_id) {
+            window.needs_redraw = true;
+            let geometry = window.geometry;
+            self.damage_tracker.add_damage(geometry);
+        }
     }
     
     pub fn next_keyboard_serial(&mut self) -> u32 {
@@ -687,7 +799,11 @@ impl State {
             mapped: false,
             buffer: None,
             pending_buffer: None,
+            needs_redraw: true,
+            last_buffer_id: 0,
         });
+        
+        self.damage_tracker.mark_full_damage();
         
         id
     }
@@ -701,8 +817,14 @@ impl State {
         let (screen_width, screen_height) = self.screen_size();
         
         for (i, window) in self.windows.iter_mut().enumerate() {
-            window.geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
+            let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
+            if window.geometry != new_geometry {
+                window.geometry = new_geometry;
+                window.needs_redraw = true;
+            }
         }
+        
+        self.damage_tracker.mark_full_damage();
         
         for i in 0..num_windows {
             let window_id = self.windows[i].id;
@@ -713,7 +835,6 @@ impl State {
             let states = self.get_toplevel_states(window_id);
             let serial = self.next_keyboard_serial();
             
-            // Tell client to render smaller to leave room for title bar
             let client_height = (geometry.height - TITLE_BAR_HEIGHT).max(1);
             xdg_toplevel.configure(geometry.width, client_height, states);
             xdg_surface.configure(serial);
@@ -769,6 +890,8 @@ impl State {
     
     pub fn remove_window(&mut self, id: WindowId) {
         if let Some(pos) = self.windows.iter().position(|w| w.id == id) {
+            let geometry = self.windows[pos].geometry;
+            self.damage_tracker.add_damage(geometry);
             self.windows.swap_remove(pos);
         }
         self.keyboard_to_window.retain(|_, window_id| *window_id != id);
@@ -780,6 +903,8 @@ impl State {
                 self.set_focus(new_focus_id);
             }
         }
+        
+        self.damage_tracker.mark_full_damage();
     }
     
     pub fn focus_next(&mut self) {
@@ -840,7 +965,19 @@ impl State {
             return;
         }
         
+        if let Some(old_id) = old_focused {
+            if let Some(old_win) = self.windows.iter_mut().find(|w| w.id == old_id) {
+                old_win.needs_redraw = true;
+                self.damage_tracker.add_damage(old_win.geometry);
+            }
+        }
+        
         self.focused_window = Some(window_id);
+        
+        if let Some(new_win) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            new_win.needs_redraw = true;
+            self.damage_tracker.add_damage(new_win.geometry);
+        }
         
         let new_window_info = self.windows.iter()
             .find(|w| w.id == window_id)
@@ -967,17 +1104,33 @@ impl State {
     }
     
     pub fn handle_pointer_motion(&mut self, x: f64, y: f64) {
+        let old_x = self.cursor_x;
+        let old_y = self.cursor_y;
         self.cursor_x = x as i32;
         self.cursor_y = y as i32;
         self.pointer_x = x;
         self.pointer_y = y;
+        
+        if self.cursor_visible && (old_x != self.cursor_x || old_y != self.cursor_y) {
+            self.damage_tracker.add_damage(Rectangle {
+                x: old_x,
+                y: old_y,
+                width: 20,
+                height: 24,
+            });
+            self.damage_tracker.add_damage(Rectangle {
+                x: self.cursor_x,
+                y: self.cursor_y,
+                width: 20,
+                height: 24,
+            });
+        }
         
         let window_id = self.window_at(x, y);
         
         if window_id != self.pointer_focus {
             let serial = self.next_pointer_serial();
             
-            // Leave old window
             if let Some(old_id) = self.pointer_focus {
                 if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
                     let old_client = old_window.wl_surface.client();
@@ -989,7 +1142,6 @@ impl State {
                 }
             }
             
-            // Enter new window
             if let Some(new_id) = window_id {
                 if let Some(new_window) = self.windows.iter().find(|w| w.id == new_id) {
                     let new_client = new_window.wl_surface.client();
@@ -1007,7 +1159,6 @@ impl State {
             
             self.pointer_focus = window_id;
         } else if let Some(win_id) = window_id {
-            // Motion within same window
             if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
                 let client = window.wl_surface.client();
                 let g = window.geometry;
