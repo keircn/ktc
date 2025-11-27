@@ -204,13 +204,13 @@ impl Canvas {
         }
     }
 
-    pub fn blit_fast(&mut self, src: &[u32], src_width: usize, src_height: usize, dst_x: i32, dst_y: i32) {
+    pub fn blit_fast(&mut self, src: &[u32], src_width: usize, src_height: usize, src_stride: usize, dst_x: i32, dst_y: i32) {
         let dst_x = dst_x.max(0) as usize;
         let dst_y = dst_y.max(0) as usize;
 
         for y in 0..src_height.min(self.height.saturating_sub(dst_y)) {
             let dst_row = dst_y + y;
-            let src_offset = y * src_width;
+            let src_offset = y * src_stride;
             let dst_offset = dst_row * self.stride + dst_x;
             let copy_width = src_width.min(self.width.saturating_sub(dst_x));
 
@@ -761,13 +761,13 @@ impl State {
         });
     }
     
-    pub fn get_buffer_pixels(&mut self, buffer: &WlBuffer) -> Option<&[u32]> {
+    pub fn get_buffer_pixels(&mut self, buffer: &WlBuffer) -> Option<(&[u32], usize)> {
         let buffer_id = buffer.id().protocol_id();
         let buffer_data = self.buffers.get(&buffer_id)?;
         let pool_id = buffer_data.pool_id;
         let offset = buffer_data.offset;
-        let width = buffer_data.width;
         let height = buffer_data.height;
+        let stride = buffer_data.stride;
         
         let pool_data = self.shm_pools.get_mut(&pool_id)?;
         
@@ -791,12 +791,13 @@ impl State {
         }
         
         let mmap_ptr = pool_data.mmap_ptr?;
+        let stride_pixels = (stride / 4) as usize;
         
         unsafe {
             let buffer_start = mmap_ptr.as_ptr().add(offset as usize) as *const u32;
-            let pixel_count = (width * height) as usize;
+            let pixel_count = stride_pixels * height as usize;
             
-            Some(std::slice::from_raw_parts(buffer_start, pixel_count))
+            Some((std::slice::from_raw_parts(buffer_start, pixel_count), stride_pixels))
         }
     }
     
