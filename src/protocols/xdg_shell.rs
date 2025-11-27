@@ -80,17 +80,24 @@ impl Dispatch<XdgSurface, ()> for State {
                     log::info!("[xdg_surface] Created window id={}", window_id);
                     
                     let tiling_states = state.get_toplevel_states(window_id);
+                    log::info!("[xdg_surface] Got tiling states for window {}", window_id);
+                    
                     let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
                         (window.geometry.width, window.geometry.height)
                     } else {
                         state.screen_size()
                     };
+                    log::info!("[xdg_surface] Window {} geometry: {}x{}", window_id, geometry_width, geometry_height);
                     
+                    log::info!("[xdg_surface] Sending toplevel.configure for window {}", window_id);
                     toplevel.configure(geometry_width, geometry_height, tiling_states);
                     let serial = state.next_keyboard_serial();
+                    log::info!("[xdg_surface] Sending xdg_surface.configure (serial={}) for window {}", serial, window_id);
                     resource.configure(serial);
+                    log::info!("[xdg_surface] Setting focus to window {}", window_id);
                     state.set_focus_without_relayout(window_id);
-                    state.relayout_windows();
+                    state.needs_relayout = true;
+                    log::info!("[xdg_surface] Done processing GetToplevel for window {}", window_id);
                 } else {
                     log::warn!("[xdg_surface] GetToplevel called but no pending XdgSurface found");
                 }

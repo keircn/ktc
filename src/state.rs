@@ -273,6 +273,8 @@ pub struct State {
     pub keymap_data: Option<KeymapData>,
     
     pub pending_xdg_surfaces: HashMap<u32, (XdgSurface, WlSurface)>,
+    
+    pub needs_relayout: bool,
 }
 
 impl Drop for State {
@@ -331,6 +333,7 @@ impl State {
             pointer_serial: 0,
             keymap_data,
             pending_xdg_surfaces: HashMap::new(),
+            needs_relayout: false,
         }
     }
     
@@ -549,6 +552,7 @@ impl State {
     
     pub fn relayout_windows(&mut self) {
         let num_windows = self.windows.len();
+        log::info!("[relayout] relayout_windows called, {} windows", num_windows);
         if num_windows == 0 {
             return;
         }
@@ -565,12 +569,15 @@ impl State {
             let xdg_surface = self.windows[i].xdg_surface.clone();
             let xdg_toplevel = self.windows[i].xdg_toplevel.clone();
             
+            log::info!("[relayout] Configuring window {} ({}x{})", window_id, geometry.width, geometry.height);
             let states = self.get_toplevel_states(window_id);
             let serial = self.next_keyboard_serial();
             
             xdg_toplevel.configure(geometry.width, geometry.height, states);
             xdg_surface.configure(serial);
+            log::info!("[relayout] Window {} configured", window_id);
         }
+        log::info!("[relayout] relayout_windows done");
     }
     
     pub fn get_window_mut(&mut self, id: WindowId) -> Option<&mut Window> {
@@ -675,33 +682,54 @@ impl State {
     }
     
     pub fn set_focus_without_relayout(&mut self, window_id: WindowId) {
+        log::info!("[focus] set_focus_without_relayout called for window {}", window_id);
         let old_focused = self.focused_window;
         
         if old_focused == Some(window_id) {
+            log::info!("[focus] Window {} already focused, returning", window_id);
             return;
         }
         
         self.focused_window = Some(window_id);
+        log::info!("[focus] Set focused_window to {}, old was {:?}", window_id, old_focused);
         
-        let new_surface = self.windows.iter()
+        let new_window_info = self.windows.iter()
             .find(|w| w.id == window_id)
-            .map(|w| w.wl_surface.clone());
+            .map(|w| (w.wl_surface.clone(), w.wl_surface.client()));
         
-        if let Some(surface) = new_surface {
+        log::info!("[focus] Found window info: {:?}", new_window_info.is_some());
+        
+        if let Some((surface, Some(new_client))) = new_window_info {
+            log::info!("[focus] Processing keyboard events, {} keyboards total", self.keyboards.len());
             let serial = self.next_keyboard_serial();
-            for keyboard in &self.keyboards {
+            for (i, keyboard) in self.keyboards.iter().enumerate() {
+                log::info!("[focus] Checking keyboard {} of {}", i + 1, self.keyboards.len());
+                let kb_client = keyboard.client();
+                if kb_client.as_ref() != Some(&new_client) {
+                    log::info!("[focus] Keyboard {} belongs to different client, skipping", i + 1);
+                    continue;
+                }
+                
                 let kb_id = keyboard.id();
+                log::info!("[focus] Keyboard {} belongs to same client", i + 1);
                 if let Some(old_id) = old_focused {
                     if self.keyboard_to_window.get(&kb_id) == Some(&old_id) {
                         if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
-                            keyboard.leave(serial, &old_window.wl_surface);
+                            if old_window.wl_surface.client().as_ref() == Some(&new_client) {
+                                log::info!("[focus] Sending keyboard.leave to old window {}", old_id);
+                                keyboard.leave(serial, &old_window.wl_surface);
+                            }
                         }
                     }
                 }
                 
+                log::info!("[focus] Sending keyboard.enter for window {}", window_id);
                 keyboard.enter(serial, &surface, vec![]);
                 self.keyboard_to_window.insert(kb_id, window_id);
+                log::info!("[focus] Keyboard {} done", i + 1);
             }
+        } else {
+            log::info!("[focus] No valid window info or client found");
         }
         
         log::info!("Focus changed to window {}", window_id);

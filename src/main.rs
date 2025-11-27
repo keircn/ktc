@@ -493,6 +493,13 @@ fn render_frame(
     window: &winit::window::Window,
     loop_data: &mut NestedLoopData
 ) {
+    if loop_data.state.needs_relayout {
+        log::info!("[render] Processing deferred relayout");
+        loop_data.state.needs_relayout = false;
+        loop_data.state.relayout_windows();
+        loop_data.display.flush_clients().ok();
+    }
+    
     let (width, height) = {
         let size = window.inner_size();
         (size.width as usize, size.height as usize)
@@ -559,6 +566,13 @@ fn render_frame(
 }
 
 fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
+    if state.needs_relayout {
+        log::info!("[render] Processing deferred relayout");
+        state.needs_relayout = false;
+        state.relayout_windows();
+        display.flush_clients().ok();
+    }
+    
     state.canvas.clear_with_pattern();
 
     let focused_id = state.focused_window;
