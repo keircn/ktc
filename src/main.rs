@@ -436,6 +436,25 @@ fn run_standalone() {
                                         data.display.flush_clients().ok();
                                     }
                                 }
+                                InputAction::PointerMotion { dx, dy } => {
+                                    let (screen_w, screen_h) = data.state.screen_size();
+                                    let new_x = (data.state.pointer_x + dx).clamp(0.0, screen_w as f64 - 1.0);
+                                    let new_y = (data.state.pointer_y + dy).clamp(0.0, screen_h as f64 - 1.0);
+                                    data.state.handle_pointer_motion(new_x, new_y);
+                                    data.display.flush_clients().ok();
+                                }
+                                InputAction::PointerMotionAbsolute { x, y } => {
+                                    data.state.handle_pointer_motion(x, y);
+                                    data.display.flush_clients().ok();
+                                }
+                                InputAction::PointerButton { button, pressed } => {
+                                    data.state.handle_pointer_button(button, pressed);
+                                    data.display.flush_clients().ok();
+                                }
+                                InputAction::PointerAxis { horizontal, vertical } => {
+                                    data.state.handle_pointer_axis(horizontal, vertical);
+                                    data.display.flush_clients().ok();
+                                }
                             }
                         });
                     }

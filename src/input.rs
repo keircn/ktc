@@ -1,5 +1,6 @@
 use input::event::{Event, EventTrait};
 use input::event::keyboard::KeyboardEventTrait;
+use input::event::pointer::PointerScrollEvent;
 pub use input::event::keyboard::KeyState;
 use input::{Libinput, LibinputInterface};
 use std::fs::{File, OpenOptions};
@@ -78,6 +79,49 @@ impl InputHandler {
                         if device.has_capability(input::DeviceCapability::Keyboard) {
                             has_keyboard_device = true;
                         }
+                    }
+                }
+                Event::Pointer(pointer_event) => {
+                    use input::event::PointerEvent;
+                    match pointer_event {
+                        PointerEvent::Motion(motion) => {
+                            callback(InputAction::PointerMotion {
+                                dx: motion.dx(),
+                                dy: motion.dy(),
+                            });
+                        }
+                        PointerEvent::MotionAbsolute(abs) => {
+                            callback(InputAction::PointerMotionAbsolute {
+                                x: abs.absolute_x(),
+                                y: abs.absolute_y(),
+                            });
+                        }
+                        PointerEvent::Button(btn) => {
+                            use input::event::pointer::ButtonState;
+                            callback(InputAction::PointerButton {
+                                button: btn.button(),
+                                pressed: btn.button_state() == ButtonState::Pressed,
+                            });
+                        }
+                        PointerEvent::ScrollWheel(scroll) => {
+                            callback(InputAction::PointerAxis {
+                                horizontal: scroll.scroll_value_v120(input::event::pointer::Axis::Horizontal) / 120.0 * 15.0,
+                                vertical: scroll.scroll_value_v120(input::event::pointer::Axis::Vertical) / 120.0 * 15.0,
+                            });
+                        }
+                        PointerEvent::ScrollFinger(scroll) => {
+                            callback(InputAction::PointerAxis {
+                                horizontal: scroll.scroll_value(input::event::pointer::Axis::Horizontal),
+                                vertical: scroll.scroll_value(input::event::pointer::Axis::Vertical),
+                            });
+                        }
+                        PointerEvent::ScrollContinuous(scroll) => {
+                            callback(InputAction::PointerAxis {
+                                horizontal: scroll.scroll_value(input::event::pointer::Axis::Horizontal),
+                                vertical: scroll.scroll_value(input::event::pointer::Axis::Vertical),
+                            });
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -187,5 +231,21 @@ pub enum InputAction {
         mods_latched: u32,
         mods_locked: u32,
         group: u32,
+    },
+    PointerMotion {
+        dx: f64,
+        dy: f64,
+    },
+    PointerMotionAbsolute {
+        x: f64,
+        y: f64,
+    },
+    PointerButton {
+        button: u32,
+        pressed: bool,
+    },
+    PointerAxis {
+        horizontal: f64,
+        vertical: f64,
     },
 }
