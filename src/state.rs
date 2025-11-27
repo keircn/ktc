@@ -351,7 +351,7 @@ impl State {
         
         let keymap_string = keymap.get_as_string(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1);
         let keymap_bytes = keymap_string.as_bytes();
-        let size = keymap_bytes.len() + 1; // +1 for null terminator
+        let size = keymap_bytes.len() + 1;
         
         let name = std::ffi::CString::new("ktc-keymap").ok()?;
         let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
@@ -365,7 +365,7 @@ impl State {
             log::error!("Failed to write keymap to memfd");
             return None;
         }
-        if file.write_all(&[0]).is_err() { // null terminator
+        if file.write_all(&[0]).is_err() {
             log::error!("Failed to write null terminator to keymap");
             return None;
         }

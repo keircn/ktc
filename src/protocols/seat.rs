@@ -41,7 +41,6 @@ impl Dispatch<WlSeat, ()> for State {
             wl_seat::Request::GetKeyboard { id } => {
                 let keyboard = data_init.init(id, ());
                 
-                // Send keymap to client
                 if let Some(ref keymap_data) = state.keymap_data {
                     keyboard.keymap(KeymapFormat::XkbV1, keymap_data.fd.as_fd(), keymap_data.size);
                     log::info!("[seat] Sent keymap to keyboard (size={})", keymap_data.size);
@@ -49,9 +48,8 @@ impl Dispatch<WlSeat, ()> for State {
                     log::warn!("[seat] No keymap available to send to keyboard");
                 }
                 
-                // Send repeat info if supported
                 if keyboard.version() >= 4 {
-                    keyboard.repeat_info(25, 600); // 25 keys/sec, 600ms delay
+                    keyboard.repeat_info(25, 600);
                 }
                 
                 state.keyboards.push(keyboard);

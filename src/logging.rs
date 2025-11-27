@@ -119,7 +119,6 @@ impl log::Log for FileLogger {
             let _ = file.flush();
         }
         
-        // Also print to stderr for immediate visibility
         eprint!("{}", log_line);
     }
     

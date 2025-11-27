@@ -376,11 +376,25 @@ fn run_standalone() {
                                     match std::process::Command::new("foot")
                                         .env("WAYLAND_DISPLAY", &data.socket_name)
                                         .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+                                        .env("WAYLAND_DEBUG", "1")
+                                        .stderr(std::process::Stdio::piped())
                                         .spawn() {
-                                        Ok(child) => {
+                                        Ok(mut child) => {
                                             let pid = child.id();
                                             log::info!("[main] foot launched with PID {}", pid);
                                             session::register_child(pid);
+                                            
+                                            if let Some(stderr) = child.stderr.take() {
+                                                std::thread::spawn(move || {
+                                                    use std::io::{BufRead, BufReader};
+                                                    let reader = BufReader::new(stderr);
+                                                    for line in reader.lines() {
+                                                        if let Ok(line) = line {
+                                                            log::info!("[foot] {}", line);
+                                                        }
+                                                    }
+                                                });
+                                            }
                                         }
                                         Err(e) => {
                                             log::error!("[main] Failed to launch foot: {}", e);
