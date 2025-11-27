@@ -228,6 +228,31 @@ fn run_nested() {
             Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
                 render_frame(&mut surface, &window, &mut loop_data);
             }
+            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
+                loop_data.state.handle_pointer_motion(position.x, position.y);
+                loop_data.display.flush_clients().ok();
+            }
+            Event::WindowEvent { event: WindowEvent::MouseInput { state: button_state, button, .. }, .. } => {
+                let btn = match button {
+                    winit::event::MouseButton::Left => 0x110,   // BTN_LEFT
+                    winit::event::MouseButton::Right => 0x111,  // BTN_RIGHT
+                    winit::event::MouseButton::Middle => 0x112, // BTN_MIDDLE
+                    winit::event::MouseButton::Back => 0x113,
+                    winit::event::MouseButton::Forward => 0x114,
+                    winit::event::MouseButton::Other(n) => 0x110 + n as u32,
+                };
+                let pressed = button_state == winit::event::ElementState::Pressed;
+                loop_data.state.handle_pointer_button(btn, pressed);
+                loop_data.display.flush_clients().ok();
+            }
+            Event::WindowEvent { event: WindowEvent::MouseWheel { delta, .. }, .. } => {
+                let (h, v) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(h, v) => (h as f64 * 10.0, v as f64 * 10.0),
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
+                };
+                loop_data.state.handle_pointer_axis(h, -v);
+                loop_data.display.flush_clients().ok();
+            }
             Event::AboutToWait => {
                 window.request_redraw();
             }
@@ -536,6 +561,11 @@ fn render_frame(
         loop_data.state.canvas.clear_with_pattern();
     }
     
+    // Draw cursor
+    if loop_data.state.cursor_visible {
+        loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
+    }
+    
     loop_data.state.process_screencopy_frames(has_damage);
     
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
@@ -604,6 +634,11 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         }
     } else if state.windows.is_empty() {
         state.canvas.clear_with_pattern();
+    }
+    
+    // Draw cursor
+    if state.cursor_visible {
+        state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
     }
     
     state.process_screencopy_frames(has_damage);

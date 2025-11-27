@@ -299,6 +299,46 @@ impl Canvas {
             }
         }
     }
+    
+    pub fn draw_cursor(&mut self, x: i32, y: i32) {
+        const CURSOR: &[&str] = &[
+            "X...............",
+            "XX..............",
+            "X.X.............",
+            "X..X............",
+            "X...X...........",
+            "X....X..........",
+            "X.....X.........",
+            "X......X........",
+            "X.......X.......",
+            "X........X......",
+            "X.........X.....",
+            "X..........X....",
+            "X......XXXXX....",
+            "X...X..X........",
+            "X..X.X..X.......",
+            "X.X..X..X.......",
+            "XX....X..X......",
+            "X......X..X.....",
+            ".......X..X.....",
+            "........XX......",
+        ];
+        
+        for (dy, row) in CURSOR.iter().enumerate() {
+            for (dx, ch) in row.chars().enumerate() {
+                let px = x as usize + dx;
+                let py = y as usize + dy;
+                if px < self.width && py < self.height {
+                    let color = match ch {
+                        'X' => 0xFFFFFFFF,
+                        '.' => 0xFF000000,
+                        _ => continue,
+                    };
+                    self.pixels[py * self.stride + px] = color;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -339,8 +379,17 @@ pub struct State {
     pub keyboards: Vec<WlKeyboard>,
     pub keyboard_to_window: HashMap<ObjectId, WindowId>,
     pub pointers: Vec<WlPointer>,
+    pub pointer_to_window: HashMap<ObjectId, WindowId>,
     pub keyboard_serial: u32,
     pub pointer_serial: u32,
+    
+    pub pointer_x: f64,
+    pub pointer_y: f64,
+    pub pointer_focus: Option<WindowId>,
+    
+    pub cursor_x: i32,
+    pub cursor_y: i32,
+    pub cursor_visible: bool,
     
     pub keymap_data: Option<KeymapData>,
     
@@ -414,8 +463,15 @@ impl State {
             keyboards: Vec::new(),
             keyboard_to_window: HashMap::new(),
             pointers: Vec::new(),
+            pointer_to_window: HashMap::new(),
             keyboard_serial: 0,
             pointer_serial: 0,
+            pointer_x: 0.0,
+            pointer_y: 0.0,
+            pointer_focus: None,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: true,
             keymap_data,
             pending_xdg_surfaces: HashMap::new(),
             needs_relayout: false,
@@ -893,6 +949,144 @@ impl State {
             .filter(|kb| kb.client().as_ref() == Some(&focused_client))
             .cloned()
             .collect()
+    }
+    
+    pub fn window_at(&self, x: f64, y: f64) -> Option<WindowId> {
+        for window in self.windows.iter().rev() {
+            if !window.mapped {
+                continue;
+            }
+            let g = window.geometry;
+            let content_y = g.y + TITLE_BAR_HEIGHT;
+            if x >= g.x as f64 && x < (g.x + g.width) as f64 &&
+               y >= g.y as f64 && y < (content_y + g.height - TITLE_BAR_HEIGHT) as f64 {
+                return Some(window.id);
+            }
+        }
+        None
+    }
+    
+    pub fn handle_pointer_motion(&mut self, x: f64, y: f64) {
+        self.cursor_x = x as i32;
+        self.cursor_y = y as i32;
+        self.pointer_x = x;
+        self.pointer_y = y;
+        
+        let window_id = self.window_at(x, y);
+        
+        if window_id != self.pointer_focus {
+            let serial = self.next_pointer_serial();
+            
+            // Leave old window
+            if let Some(old_id) = self.pointer_focus {
+                if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
+                    let old_client = old_window.wl_surface.client();
+                    for pointer in &self.pointers {
+                        if pointer.client() == old_client {
+                            pointer.leave(serial, &old_window.wl_surface);
+                        }
+                    }
+                }
+            }
+            
+            // Enter new window
+            if let Some(new_id) = window_id {
+                if let Some(new_window) = self.windows.iter().find(|w| w.id == new_id) {
+                    let new_client = new_window.wl_surface.client();
+                    let g = new_window.geometry;
+                    let local_x = x - g.x as f64;
+                    let local_y = y - (g.y + TITLE_BAR_HEIGHT) as f64;
+                    
+                    for pointer in &self.pointers {
+                        if pointer.client() == new_client {
+                            pointer.enter(serial, &new_window.wl_surface, local_x, local_y);
+                        }
+                    }
+                }
+            }
+            
+            self.pointer_focus = window_id;
+        } else if let Some(win_id) = window_id {
+            // Motion within same window
+            if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
+                let client = window.wl_surface.client();
+                let g = window.geometry;
+                let local_x = x - g.x as f64;
+                let local_y = y - (g.y + TITLE_BAR_HEIGHT) as f64;
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u32;
+                
+                for pointer in &self.pointers {
+                    if pointer.client() == client {
+                        pointer.motion(time, local_x, local_y);
+                    }
+                }
+            }
+        }
+    }
+    
+    pub fn handle_pointer_button(&mut self, button: u32, pressed: bool) {
+        let state = if pressed {
+            wayland_server::protocol::wl_pointer::ButtonState::Pressed
+        } else {
+            wayland_server::protocol::wl_pointer::ButtonState::Released
+        };
+        
+        let serial = self.next_pointer_serial();
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u32;
+        
+        // Click to focus
+        if pressed {
+            if let Some(win_id) = self.pointer_focus {
+                if self.focused_window != Some(win_id) {
+                    self.set_focus(win_id);
+                }
+            }
+        }
+        
+        if let Some(win_id) = self.pointer_focus {
+            if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
+                let client = window.wl_surface.client();
+                for pointer in &self.pointers {
+                    if pointer.client() == client {
+                        pointer.button(serial, time, button, state);
+                    }
+                }
+            }
+        }
+    }
+    
+    pub fn handle_pointer_axis(&mut self, horizontal: f64, vertical: f64) {
+        use wayland_server::protocol::wl_pointer::Axis;
+        
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u32;
+        
+        if let Some(win_id) = self.pointer_focus {
+            if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
+                let client = window.wl_surface.client();
+                for pointer in &self.pointers {
+                    if pointer.client() == client {
+                        if vertical.abs() > 0.0 {
+                            pointer.axis(time, Axis::VerticalScroll, vertical);
+                        }
+                        if horizontal.abs() > 0.0 {
+                            pointer.axis(time, Axis::HorizontalScroll, horizontal);
+                        }
+                        if pointer.version() >= 5 {
+                            pointer.frame();
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
