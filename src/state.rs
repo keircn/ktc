@@ -490,6 +490,10 @@ pub struct Window {
     pub pending_buffer: Option<WlBuffer>,
     pub needs_redraw: bool,
     pub last_buffer_id: u32,
+    pub pixel_cache: Vec<u32>,
+    pub cache_width: usize,
+    pub cache_height: usize,
+    pub cache_stride: usize,
 }
 
 pub struct State {
@@ -834,6 +838,10 @@ impl State {
             pending_buffer: None,
             needs_redraw: true,
             last_buffer_id: 0,
+            pixel_cache: Vec::new(),
+            cache_width: 0,
+            cache_height: 0,
+            cache_stride: 0,
         });
         
         self.damage_tracker.mark_full_damage();
@@ -1098,6 +1106,82 @@ impl State {
             
             Some((std::slice::from_raw_parts(buffer_start, pixel_count), stride_pixels))
         }
+    }
+    
+    pub fn update_window_pixel_cache(&mut self, window_id: WindowId) -> bool {
+        let (buffer_id, buf_width, buf_height) = {
+            let window = match self.windows.iter().find(|w| w.id == window_id) {
+                Some(w) => w,
+                None => return false,
+            };
+            let buffer = match &window.buffer {
+                Some(b) => b,
+                None => return false,
+            };
+            let buffer_id = buffer.id().protocol_id();
+            let buffer_data = match self.buffers.get(&buffer_id) {
+                Some(d) => d,
+                None => return false,
+            };
+            (buffer_id, buffer_data.width as usize, buffer_data.height as usize)
+        };
+        
+        let buffer_data = match self.buffers.get(&buffer_id) {
+            Some(d) => d.clone(),
+            None => return false,
+        };
+        
+        let pool_data = match self.shm_pools.get_mut(&buffer_data.pool_id) {
+            Some(p) => p,
+            None => return false,
+        };
+        
+        if pool_data.mmap_ptr.is_none() {
+            unsafe {
+                let ptr = libc::mmap(
+                    std::ptr::null_mut(),
+                    pool_data.size as usize,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    pool_data.fd.as_fd().as_raw_fd(),
+                    0,
+                );
+                
+                if ptr == libc::MAP_FAILED {
+                    return false;
+                }
+                
+                pool_data.mmap_ptr = NonNull::new(ptr as *mut u8);
+            }
+        }
+        
+        let mmap_ptr = match pool_data.mmap_ptr {
+            Some(p) => p,
+            None => return false,
+        };
+        
+        let stride_pixels = (buffer_data.stride / 4) as usize;
+        let pixel_count = stride_pixels * buf_height;
+        
+        let window = match self.windows.iter_mut().find(|w| w.id == window_id) {
+            Some(w) => w,
+            None => return false,
+        };
+        
+        if window.pixel_cache.len() < pixel_count {
+            window.pixel_cache.resize(pixel_count, 0);
+        }
+        
+        unsafe {
+            let src = mmap_ptr.as_ptr().add(buffer_data.offset as usize) as *const u32;
+            std::ptr::copy_nonoverlapping(src, window.pixel_cache.as_mut_ptr(), pixel_count);
+        }
+        
+        window.cache_width = buf_width;
+        window.cache_height = buf_height;
+        window.cache_stride = stride_pixels;
+        
+        true
     }
     
     pub fn get_focused_keyboards(&self) -> Vec<WlKeyboard> {

@@ -553,53 +553,13 @@ fn render_frame(
     let focused_id = loop_data.state.focused_window;
     let needs_full_redraw = loop_data.state.damage_tracker.is_full_damage();
     
-    let window_meta: Vec<_> = loop_data.state.windows.iter()
-        .filter(|w| w.mapped && w.buffer.is_some())
-        .map(|w| {
-            let wl_buffer = w.buffer.as_ref().unwrap();
-            let buffer_id = wl_buffer.id().protocol_id();
-            (w.id, w.geometry, buffer_id, w.needs_redraw || needs_full_redraw, focused_id == Some(w.id))
-        })
+    let windows_to_render: Vec<_> = loop_data.state.windows.iter()
+        .filter(|w| w.mapped && w.buffer.is_some() && (w.needs_redraw || needs_full_redraw))
+        .map(|w| w.id)
         .collect();
     
-    struct WindowRenderData {
-        id: state::WindowId,
-        geometry: state::Rectangle,
-        buf_width: usize,
-        buf_height: usize,
-        stride: usize,
-        is_focused: bool,
-        pixels: Vec<u32>,
-    }
-    
-    let mut render_data: Vec<WindowRenderData> = Vec::new();
-    
-    for (id, geometry, buffer_id, needs_redraw, is_focused) in window_meta {
-        if !needs_redraw {
-            continue;
-        }
-        let buffer_data = match loop_data.state.buffers.get(&buffer_id) {
-            Some(d) => d.clone(),
-            None => continue,
-        };
-        
-        let wl_buffer = loop_data.state.windows.iter()
-            .find(|w| w.id == id)
-            .and_then(|w| w.buffer.clone());
-        
-        if let Some(ref buf) = wl_buffer {
-            if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(buf) {
-                render_data.push(WindowRenderData {
-                    id,
-                    geometry,
-                    buf_width: buffer_data.width as usize,
-                    buf_height: buffer_data.height as usize,
-                    stride,
-                    is_focused,
-                    pixels: pixels.to_vec(),
-                });
-            }
-        }
+    for id in &windows_to_render {
+        loop_data.state.update_window_pixel_cache(*id);
     }
 
     let mut any_window_redrawn = false;
@@ -608,20 +568,32 @@ fn render_frame(
         loop_data.state.canvas.clear_with_pattern();
     }
     
-    for data in &render_data {
-        loop_data.state.canvas.draw_decorations(
-            data.geometry.x, data.geometry.y, 
-            data.buf_width as i32, data.buf_height as i32,
-            TITLE_BAR_HEIGHT, data.is_focused
-        );
-        
-        let content_y = data.geometry.y + TITLE_BAR_HEIGHT;
-        loop_data.state.canvas.blit_fast(&data.pixels, data.buf_width, data.buf_height, data.stride, data.geometry.x, content_y);
-        any_window_redrawn = true;
+    for id in &windows_to_render {
+        if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
+            if win.cache_width > 0 && win.cache_height > 0 {
+                let is_focused = focused_id == Some(*id);
+                loop_data.state.canvas.draw_decorations(
+                    win.geometry.x, win.geometry.y, 
+                    win.cache_width as i32, win.cache_height as i32,
+                    TITLE_BAR_HEIGHT, is_focused
+                );
+                
+                let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
+                loop_data.state.canvas.blit_fast(
+                    &win.pixel_cache, 
+                    win.cache_width, 
+                    win.cache_height, 
+                    win.cache_stride, 
+                    win.geometry.x, 
+                    content_y
+                );
+                any_window_redrawn = true;
+            }
+        }
     }
     
-    for data in &render_data {
-        if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == data.id) {
+    for id in &windows_to_render {
+        if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == *id) {
             win.needs_redraw = false;
             if let Some(ref buffer) = win.buffer {
                 buffer.release();
@@ -677,53 +649,13 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     let focused_id = state.focused_window;
     let needs_full_redraw = state.damage_tracker.is_full_damage();
     
-    let window_meta: Vec<_> = state.windows.iter()
-        .filter(|w| w.mapped && w.buffer.is_some())
-        .map(|w| {
-            let wl_buffer = w.buffer.as_ref().unwrap();
-            let buffer_id = wl_buffer.id().protocol_id();
-            (w.id, w.geometry, buffer_id, w.needs_redraw || needs_full_redraw, focused_id == Some(w.id))
-        })
+    let windows_to_render: Vec<_> = state.windows.iter()
+        .filter(|w| w.mapped && w.buffer.is_some() && (w.needs_redraw || needs_full_redraw))
+        .map(|w| w.id)
         .collect();
     
-    struct WindowRenderData {
-        id: state::WindowId,
-        geometry: state::Rectangle,
-        buf_width: usize,
-        buf_height: usize,
-        stride: usize,
-        is_focused: bool,
-        pixels: Vec<u32>,
-    }
-    
-    let mut render_data: Vec<WindowRenderData> = Vec::new();
-    
-    for (id, geometry, buffer_id, needs_redraw, is_focused) in window_meta {
-        if !needs_redraw {
-            continue;
-        }
-        let buffer_data = match state.buffers.get(&buffer_id) {
-            Some(d) => d.clone(),
-            None => continue,
-        };
-        
-        let wl_buffer = state.windows.iter()
-            .find(|w| w.id == id)
-            .and_then(|w| w.buffer.clone());
-        
-        if let Some(ref buf) = wl_buffer {
-            if let Some((pixels, stride)) = state.get_buffer_pixels(buf) {
-                render_data.push(WindowRenderData {
-                    id,
-                    geometry,
-                    buf_width: buffer_data.width as usize,
-                    buf_height: buffer_data.height as usize,
-                    stride,
-                    is_focused,
-                    pixels: pixels.to_vec(),
-                });
-            }
-        }
+    for id in &windows_to_render {
+        state.update_window_pixel_cache(*id);
     }
     
     let mut any_window_redrawn = false;
@@ -732,20 +664,32 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         state.canvas.clear_with_pattern();
     }
     
-    for data in &render_data {
-        state.canvas.draw_decorations(
-            data.geometry.x, data.geometry.y,
-            data.buf_width as i32, data.buf_height as i32,
-            TITLE_BAR_HEIGHT, data.is_focused
-        );
-        
-        let content_y = data.geometry.y + TITLE_BAR_HEIGHT;
-        state.canvas.blit_fast(&data.pixels, data.buf_width, data.buf_height, data.stride, data.geometry.x, content_y);
-        any_window_redrawn = true;
+    for id in &windows_to_render {
+        if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
+            if win.cache_width > 0 && win.cache_height > 0 {
+                let is_focused = focused_id == Some(*id);
+                state.canvas.draw_decorations(
+                    win.geometry.x, win.geometry.y,
+                    win.cache_width as i32, win.cache_height as i32,
+                    TITLE_BAR_HEIGHT, is_focused
+                );
+                
+                let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
+                state.canvas.blit_fast(
+                    &win.pixel_cache,
+                    win.cache_width,
+                    win.cache_height,
+                    win.cache_stride,
+                    win.geometry.x,
+                    content_y
+                );
+                any_window_redrawn = true;
+            }
+        }
     }
     
-    for data in &render_data {
-        if let Some(win) = state.windows.iter_mut().find(|w| w.id == data.id) {
+    for id in &windows_to_render {
+        if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
             win.needs_redraw = false;
             if let Some(ref buffer) = win.buffer {
                 buffer.release();
