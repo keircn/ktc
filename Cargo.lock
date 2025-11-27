@@ -791,6 +791,7 @@ dependencies = [
  "nix",
  "softbuffer",
  "wayland-protocols",
+ "wayland-protocols-wlr",
  "wayland-server",
  "winit",
  "xkbcommon",
@@ -1810,6 +1811,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]

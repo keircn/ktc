@@ -18,6 +18,7 @@ use wayland_server::protocol::{
 };
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
+use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use std::sync::Arc;
 use state::State;
 
@@ -128,6 +129,7 @@ fn setup_wayland() -> (Display<State>, ListeningSocket) {
     dh.create_global::<State, WlShm, _>(1, ());
     dh.create_global::<State, WlDataDeviceManager, _>(3, ());
     dh.create_global::<State, ZxdgOutputManagerV1, _>(3, ());
+    dh.create_global::<State, ZwlrScreencopyManagerV1, _>(3, ());
 
     let socket = ListeningSocket::bind_auto("wayland", 0..32)
         .expect("Failed to create socket");
@@ -523,6 +525,8 @@ fn render_frame(
         loop_data.state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
     }
     
+    loop_data.state.process_screencopy_frames();
+    
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
     buffer.copy_from_slice(loop_data.state.canvas.as_slice());
     buffer.present().ok();
@@ -584,6 +588,8 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         let thickness = if *is_focused { 3 } else { 1 };
         state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
     }
+    
+    state.process_screencopy_frames();
     
     if let Some(drm) = drm_info {
         unsafe {

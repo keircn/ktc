@@ -5,6 +5,7 @@ use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_sh
 use wayland_server::Resource;
 use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
 use wayland_server::backend::ObjectId;
+use crate::protocols::screencopy::PendingScreencopy;
 
 pub type WindowId = u64;
 pub type OutputId = u64;
@@ -275,6 +276,8 @@ pub struct State {
     pub pending_xdg_surfaces: HashMap<u32, (XdgSurface, WlSurface)>,
     
     pub needs_relayout: bool,
+    
+    pub screencopy_frames: Vec<PendingScreencopy>,
 }
 
 impl Drop for State {
@@ -295,6 +298,7 @@ pub struct ShmPoolData {
     pub mmap_ptr: Option<NonNull<u8>>,
 }
 
+#[derive(Clone)]
 pub struct BufferData {
     pub pool_id: u32,
     pub offset: i32,
@@ -307,6 +311,16 @@ pub struct BufferData {
 pub struct KeymapData {
     pub fd: OwnedFd,
     pub size: u32,
+}
+
+#[derive(Clone)]
+pub struct ScreencopyFrameState {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub buffer: Option<WlBuffer>,
+    pub with_damage: bool,
 }
 
 impl State {
@@ -334,6 +348,7 @@ impl State {
             keymap_data,
             pending_xdg_surfaces: HashMap::new(),
             needs_relayout: false,
+            screencopy_frames: Vec::new(),
         }
     }
     
