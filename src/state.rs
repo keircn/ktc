@@ -375,7 +375,6 @@ impl Canvas {
         let title_height = title_height as usize;
         let total_height = height as usize + title_height;
         
-        // Title bar
         for dy in 0..title_height {
             for dx in 0..width {
                 let px = x + dx;
@@ -386,15 +385,12 @@ impl Canvas {
             }
         }
         
-        // Frame border (around title + content)
-        // Top
         for dx in 0..width {
             let px = x + dx;
             if px < self.width && y < self.height {
                 self.pixels[y * self.stride + px] = border_color;
             }
         }
-        // Bottom
         let bottom_y = y + total_height.saturating_sub(1);
         if bottom_y < self.height {
             for dx in 0..width {
@@ -404,14 +400,12 @@ impl Canvas {
                 }
             }
         }
-        // Left
         for dy in 0..total_height {
             let py = y + dy;
             if x < self.width && py < self.height {
                 self.pixels[py * self.stride + x] = border_color;
             }
         }
-        // Right
         let right_x = x + width.saturating_sub(1);
         if right_x < self.width {
             for dy in 0..total_height {
@@ -422,7 +416,6 @@ impl Canvas {
             }
         }
         
-        // Line under title bar
         let title_bottom = y + title_height;
         if title_bottom < self.height {
             for dx in 0..width {
@@ -1231,7 +1224,6 @@ impl State {
             .unwrap()
             .as_millis() as u32;
         
-        // Click to focus
         if pressed {
             if let Some(win_id) = self.pointer_focus {
                 if self.focused_window != Some(win_id) {

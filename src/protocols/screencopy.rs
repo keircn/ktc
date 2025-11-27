@@ -5,7 +5,7 @@ use wayland_protocols_wlr::screencopy::v1::server::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::{self, ZwlrScreencopyManagerV1},
 };
-use crate::state::{State, ScreencopyFrameState};
+use crate::state::{State, ScreencopyFrameState, Rectangle};
 
 impl GlobalDispatch<ZwlrScreencopyManagerV1, ()> for State {
     fn bind(
@@ -130,11 +130,26 @@ impl State {
             height: region.height,
             with_damage,
         });
+        
+        if !with_damage {
+            self.damage_tracker.mark_full_damage();
+        }
     }
 
     pub fn process_screencopy_frames(&mut self, has_damage: bool) {
+        if self.screencopy_frames.is_empty() {
+            return;
+        }
+        
         let mut frames = std::mem::take(&mut self.screencopy_frames);
         let mut deferred = Vec::new();
+
+        let damage_region = if has_damage {
+            let (w, h) = self.screen_size();
+            self.damage_tracker.merged_damage(w, h)
+        } else {
+            Rectangle::default()
+        };
 
         for pending in frames.drain(..) {
             if pending.with_damage && !has_damage {
@@ -150,7 +165,15 @@ impl State {
                 let nsecs = now.subsec_nanos();
 
                 if pending.with_damage && pending.frame.version() >= 2 {
-                    pending.frame.damage(0, 0, pending.width as u32, pending.height as u32);
+                    if damage_region.is_empty() {
+                        pending.frame.damage(0, 0, pending.width as u32, pending.height as u32);
+                    } else {
+                        let rel_x = (damage_region.x - pending.x).max(0) as u32;
+                        let rel_y = (damage_region.y - pending.y).max(0) as u32;
+                        let rel_w = damage_region.width.min(pending.width) as u32;
+                        let rel_h = damage_region.height.min(pending.height) as u32;
+                        pending.frame.damage(rel_x, rel_y, rel_w, rel_h);
+                    }
                 }
 
                 pending.frame.flags(zwlr_screencopy_frame_v1::Flags::empty());
