@@ -14,6 +14,7 @@ use wayland_server::protocol::{
     wl_output::WlOutput,
     wl_shm::WlShm,
     wl_data_device_manager::WlDataDeviceManager,
+    wl_subcompositor::WlSubcompositor,
 };
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use std::sync::Arc;
@@ -119,6 +120,7 @@ fn setup_wayland() -> (Display<State>, ListeningSocket) {
     let dh = display.handle();
     
     dh.create_global::<State, WlCompositor, _>(6, ());
+    dh.create_global::<State, WlSubcompositor, _>(1, ());
     dh.create_global::<State, XdgWmBase, _>(5, ());
     dh.create_global::<State, WlSeat, _>(7, ());
     dh.create_global::<State, WlOutput, _>(4, ());
