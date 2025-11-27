@@ -92,7 +92,7 @@ pub struct Canvas {
 impl Canvas {
     pub fn new(width: usize, height: usize) -> Self {
         let stride = width;
-        let pixels = vec![0xFF202020; width * height];
+        let pixels = vec![0xFF1A1A2E; width * height];
         Self {
             pixels,
             width,
@@ -106,12 +106,75 @@ impl Canvas {
             self.width = width;
             self.height = height;
             self.stride = width;
-            self.pixels = vec![0xFF202020; width * height];
+            self.pixels = vec![0xFF1A1A2E; width * height];
         }
     }
 
     pub fn clear(&mut self, color: u32) {
         self.pixels.fill(color);
+    }
+    
+    pub fn clear_with_pattern(&mut self) {
+        let bg_dark = 0xFF1A1A2E;
+        let bg_light = 0xFF16213E;
+        let tile_size = 32;
+        
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let tx = x / tile_size;
+                let ty = y / tile_size;
+                let color = if (tx + ty) % 2 == 0 { bg_dark } else { bg_light };
+                self.pixels[y * self.stride + x] = color;
+            }
+        }
+    }
+
+    pub fn draw_border(&mut self, x: i32, y: i32, width: i32, height: i32, color: u32, thickness: i32) {
+        let x = x.max(0) as usize;
+        let y = y.max(0) as usize;
+        let width = width as usize;
+        let height = height as usize;
+        let thickness = thickness as usize;
+        
+        for dy in 0..thickness.min(height) {
+            for dx in 0..width {
+                let px = x + dx;
+                let py = y + dy;
+                if px < self.width && py < self.height {
+                    self.pixels[py * self.stride + px] = color;
+                }
+            }
+        }
+        
+        for dy in 0..thickness.min(height) {
+            for dx in 0..width {
+                let px = x + dx;
+                let py = y + height.saturating_sub(1 + dy);
+                if px < self.width && py < self.height && py >= y {
+                    self.pixels[py * self.stride + px] = color;
+                }
+            }
+        }
+        
+        for dy in 0..height {
+            for dx in 0..thickness.min(width) {
+                let px = x + dx;
+                let py = y + dy;
+                if px < self.width && py < self.height {
+                    self.pixels[py * self.stride + px] = color;
+                }
+            }
+        }
+        
+        for dy in 0..height {
+            for dx in 0..thickness.min(width) {
+                let px = x + width.saturating_sub(1 + dx);
+                let py = y + dy;
+                if px < self.width && py < self.height && px >= x {
+                    self.pixels[py * self.stride + px] = color;
+                }
+            }
+        }
     }
 
     pub fn blit(&mut self, src: &[u32], src_width: usize, src_height: usize, dst_x: i32, dst_y: i32) {
@@ -407,8 +470,8 @@ impl State {
         self.next_window_id += 1;
         
         let (screen_width, screen_height) = self.screen_size();
-        let num_windows = self.windows.len();
-        let geometry = calculate_tiling_geometry(num_windows, screen_width, screen_height);
+        let num_windows = self.windows.len() + 1;
+        let geometry = calculate_tiling_geometry(num_windows - 1, num_windows, screen_width, screen_height);
         
         self.windows.push(Window {
             id,
@@ -435,7 +498,7 @@ impl State {
         let (screen_width, screen_height) = self.screen_size();
         
         for (i, window) in self.windows.iter_mut().enumerate() {
-            window.geometry = calculate_tiling_geometry(i, screen_width, screen_height);
+            window.geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
         }
         
         for i in 0..num_windows {
@@ -444,11 +507,11 @@ impl State {
             let xdg_surface = self.windows[i].xdg_surface.clone();
             let xdg_toplevel = self.windows[i].xdg_toplevel.clone();
             
-            let states = self.get_tiling_states_for_window(window_id);
+            let states = self.get_toplevel_states(window_id);
             let serial = self.next_keyboard_serial();
             
-            xdg_surface.configure(serial);
             xdg_toplevel.configure(geometry.width, geometry.height, states);
+            xdg_surface.configure(serial);
         }
     }
     
@@ -466,29 +529,34 @@ impl State {
         self.windows.iter_mut().find(|w| w.id == focused_id)
     }
     
-    pub fn get_tiling_states_for_window(&self, window_id: WindowId) -> Vec<u8> {
+    pub fn get_toplevel_states(&self, window_id: WindowId) -> Vec<u8> {
         let num_windows = self.windows.len();
         let window_index = self.windows.iter().position(|w| w.id == window_id);
-        
-        if num_windows == 1 {
-            return vec![];
-        }
+        let is_focused = self.focused_window == Some(window_id);
         
         let mut states = vec![];
         
-        if num_windows == 2 {
-            if window_index == Some(0) {
-                states.push(ToplevelState::TiledLeft as u8);
+        if is_focused {
+            states.extend_from_slice(&(ToplevelState::Activated as u32).to_ne_bytes());
+        }
+        
+        if num_windows >= 2 {
+            if num_windows == 2 {
+                if window_index == Some(0) {
+                    states.extend_from_slice(&(ToplevelState::TiledLeft as u32).to_ne_bytes());
+                    states.extend_from_slice(&(ToplevelState::TiledTop as u32).to_ne_bytes());
+                    states.extend_from_slice(&(ToplevelState::TiledBottom as u32).to_ne_bytes());
+                } else {
+                    states.extend_from_slice(&(ToplevelState::TiledRight as u32).to_ne_bytes());
+                    states.extend_from_slice(&(ToplevelState::TiledTop as u32).to_ne_bytes());
+                    states.extend_from_slice(&(ToplevelState::TiledBottom as u32).to_ne_bytes());
+                }
             } else {
-                states.push(ToplevelState::TiledRight as u8);
+                states.extend_from_slice(&(ToplevelState::TiledLeft as u32).to_ne_bytes());
+                states.extend_from_slice(&(ToplevelState::TiledRight as u32).to_ne_bytes());
+                states.extend_from_slice(&(ToplevelState::TiledTop as u32).to_ne_bytes());
+                states.extend_from_slice(&(ToplevelState::TiledBottom as u32).to_ne_bytes());
             }
-            states.push(ToplevelState::TiledTop as u8);
-            states.push(ToplevelState::TiledBottom as u8);
-        } else {
-            states.push(ToplevelState::TiledLeft as u8);
-            states.push(ToplevelState::TiledRight as u8);
-            states.push(ToplevelState::TiledTop as u8);
-            states.push(ToplevelState::TiledBottom as u8);
         }
         
         states
@@ -502,6 +570,75 @@ impl State {
             self.focused_window = self.windows.first().map(|w| w.id);
         }
         self.keyboard_to_window.retain(|_, window_id| *window_id != id);
+    }
+    
+    pub fn focus_next(&mut self) {
+        if self.windows.is_empty() {
+            return;
+        }
+        
+        let current_idx = self.focused_window
+            .and_then(|id| self.windows.iter().position(|w| w.id == id))
+            .unwrap_or(0);
+        
+        let next_idx = (current_idx + 1) % self.windows.len();
+        let next_id = self.windows[next_idx].id;
+        
+        self.set_focus(next_id);
+    }
+    
+    pub fn focus_prev(&mut self) {
+        if self.windows.is_empty() {
+            return;
+        }
+        
+        let current_idx = self.focused_window
+            .and_then(|id| self.windows.iter().position(|w| w.id == id))
+            .unwrap_or(0);
+        
+        let prev_idx = if current_idx == 0 {
+            self.windows.len() - 1
+        } else {
+            current_idx - 1
+        };
+        let prev_id = self.windows[prev_idx].id;
+        
+        self.set_focus(prev_id);
+    }
+    
+    pub fn set_focus(&mut self, window_id: WindowId) {
+        let old_focused = self.focused_window;
+        
+        if old_focused == Some(window_id) {
+            return;
+        }
+        
+        self.focused_window = Some(window_id);
+        
+        let new_surface = self.windows.iter()
+            .find(|w| w.id == window_id)
+            .map(|w| w.wl_surface.clone());
+        
+        if let Some(surface) = new_surface {
+            let serial = self.next_keyboard_serial();
+            for keyboard in &self.keyboards {
+                let kb_id = keyboard.id();
+                if let Some(old_id) = old_focused {
+                    if self.keyboard_to_window.get(&kb_id) == Some(&old_id) {
+                        if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
+                            keyboard.leave(serial, &old_window.wl_surface);
+                        }
+                    }
+                }
+                
+                keyboard.enter(serial, &surface, vec![]);
+                self.keyboard_to_window.insert(kb_id, window_id);
+            }
+        }
+        
+        self.relayout_windows();
+        
+        log::info!("Focus changed to window {}", window_id);
     }
     
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
@@ -578,8 +715,10 @@ impl State {
     }
 }
 
-fn calculate_tiling_geometry(index: usize, screen_width: i32, screen_height: i32) -> Rectangle {
-    let num_windows = index + 1;
+fn calculate_tiling_geometry(index: usize, num_windows: usize, screen_width: i32, screen_height: i32) -> Rectangle {
+    if num_windows == 0 {
+        return Rectangle { x: 0, y: 0, width: screen_width, height: screen_height };
+    }
     
     if num_windows == 1 {
         return Rectangle {
@@ -609,7 +748,7 @@ fn calculate_tiling_geometry(index: usize, screen_width: i32, screen_height: i32
         }
     } else {
         let cols = (num_windows as f32).sqrt().ceil() as i32;
-        let rows = (num_windows as i32 + cols - 1) / cols;
+        let rows = ((num_windows as i32) + cols - 1) / cols;
         let col = (index as i32) % cols;
         let row = (index as i32) / cols;
         

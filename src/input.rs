@@ -7,7 +7,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use xkbcommon::xkb;
-use xkbcommon::xkb::keysyms::{KEY_q, KEY_t};
+use xkbcommon::xkb::keysyms::{KEY_q, KEY_t, KEY_Tab, KEY_j, KEY_k};
 
 struct Interface;
 
@@ -176,6 +176,14 @@ impl InputHandler {
                     log::info!("Alt+T detected");
                     callback(InputAction::LaunchTerminal);
                     return;
+                } else if self.alt && (keysym == KEY_Tab.into() || keysym == KEY_j.into()) {
+                    log::info!("Alt+Tab/Alt+J detected - focus next");
+                    callback(InputAction::FocusNext);
+                    return;
+                } else if self.alt && keysym == KEY_k.into() {
+                    log::info!("Alt+K detected - focus previous");
+                    callback(InputAction::FocusPrev);
+                    return;
                 }
             }
             
@@ -196,5 +204,7 @@ impl InputHandler {
 pub enum InputAction {
     ExitCompositor,
     LaunchTerminal,
+    FocusNext,
+    FocusPrev,
     KeyEvent { keycode: u32, state: KeyState },
 }

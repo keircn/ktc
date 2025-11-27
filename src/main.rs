@@ -383,6 +383,14 @@ fn run_standalone() {
                                         }
                                     }
                                 }
+                                InputAction::FocusNext => {
+                                    data.state.focus_next();
+                                    data.display.flush_clients().ok();
+                                }
+                                InputAction::FocusPrev => {
+                                    data.state.focus_prev();
+                                    data.display.flush_clients().ok();
+                                }
                                 InputAction::KeyEvent { keycode, state: key_state } => {
                                     let focused_keyboards = data.state.get_focused_keyboards();
                                     
@@ -455,7 +463,6 @@ fn run_standalone() {
     }
     
     log::info!("Main loop exited, cleaning up...");
-    // _session drops here, restoring TTY
 }
 
 fn render_frame(
@@ -478,24 +485,34 @@ fn render_frame(
         std::num::NonZeroU32::new(height as u32).unwrap(),
     ).ok();
 
-    loop_data.state.canvas.clear(0xFF202020);
+    loop_data.state.canvas.clear_with_pattern();
+    
     let mut buffers_to_release = Vec::new();
+    let focused_id = loop_data.state.focused_window;
+    
     let window_infos: Vec<_> = loop_data.state.windows.iter()
         .filter(|w| w.mapped)
         .filter_map(|w| {
             let wl_buffer = w.buffer.clone()?;
             let buffer_id = wl_buffer.id().protocol_id();
             let buffer_data = loop_data.state.buffers.get(&buffer_id)?;
-            Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize))
+            let is_focused = focused_id == Some(w.id);
+            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
         })
         .collect();
     
-    for (geometry, wl_buffer, buf_width, buf_height) in window_infos {
-        if let Some(pixels) = loop_data.state.get_buffer_pixels(&wl_buffer) {
+    for (_, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+        if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
             let pixels_copy: Vec<u32> = pixels.to_vec();
-            loop_data.state.canvas.blit_fast(&pixels_copy, buf_width, buf_height, geometry.x, geometry.y);
-            buffers_to_release.push(wl_buffer);
+            loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
+            buffers_to_release.push(wl_buffer.clone());
         }
+    }
+    
+    for (_, geometry, _, _, _, is_focused) in &window_infos {
+        let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
+        let thickness = if *is_focused { 3 } else { 1 };
+        loop_data.state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
     }
     
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
@@ -519,22 +536,32 @@ fn render_frame(
 }
 
 fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
-    state.canvas.clear(0xFF202020);
+    state.canvas.clear_with_pattern();
+
+    let focused_id = state.focused_window;
+    
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
         .filter_map(|w| {
             let wl_buffer = w.buffer.clone()?;
             let buffer_id = wl_buffer.id().protocol_id();
             let buffer_data = state.buffers.get(&buffer_id)?;
-            Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize))
+            let is_focused = focused_id == Some(w.id);
+            Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
         })
         .collect();
     
-    for (geometry, wl_buffer, buf_width, buf_height) in window_infos {
+    for (geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
         if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
             let pixels_copy: Vec<u32> = client_pixels.to_vec();
-            state.canvas.blit_fast(&pixels_copy, buf_width, buf_height, geometry.x, geometry.y);
+            state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
         }
+    }
+    
+    for (geometry, _, _, _, is_focused) in &window_infos {
+        let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
+        let thickness = if *is_focused { 3 } else { 1 };
+        state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
     }
     
     if let Some(drm) = drm_info {

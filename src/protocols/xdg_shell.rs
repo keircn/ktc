@@ -81,7 +81,7 @@ impl Dispatch<XdgSurface, ()> for State {
                     
                     state.focused_window = Some(window_id);
                     
-                    let tiling_states = state.get_tiling_states_for_window(window_id);
+                    let tiling_states = state.get_toplevel_states(window_id);
                     let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
                         (window.geometry.width, window.geometry.height)
                     } else {

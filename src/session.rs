@@ -91,7 +91,6 @@ impl Drop for Session {
         }
         
         unsafe {
-            // Make sure the VT is active and usable
             libc::ioctl(self.tty_fd, VT_ACTIVATE, self.vt_num);
             libc::ioctl(self.tty_fd, VT_WAITACTIVE, self.vt_num);
             
@@ -130,7 +129,6 @@ extern "C" fn signal_handler(sig: i32) {
 }
 
 fn open_tty() -> Result<RawFd, Box<dyn std::error::Error>> {
-    // Try to get the current TTY
     let tty_path = std::fs::read_to_string("/sys/class/tty/tty0/active")
         .ok()
         .and_then(|s| {
@@ -212,7 +210,6 @@ fn set_kb_mode(fd: RawFd, mode: i32) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// TTY ioctl constants
 const KDSETMODE: libc::c_ulong = 0x4B3A;
 const KDGETMODE: libc::c_ulong = 0x4B3B;
 const KDGKBMODE: libc::c_ulong = 0x4B44;
