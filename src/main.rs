@@ -711,43 +711,50 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         state.damage_tracker.clear();
     }
     
+    // Process screencopy - always provide frames when requested (canvas is always valid)
     if has_pending_screencopy {
         state.process_screencopy_frames(has_damage);
     }
     
-    if let Some(drm) = drm_info {
-        unsafe {
-            let fb_pixels = std::slice::from_raw_parts_mut(drm.fb_ptr, drm.width * drm.height);
-            let canvas_pixels = state.canvas.as_slice();
-            let copy_height = state.canvas.height.min(drm.height);
-            let copy_width = state.canvas.width.min(drm.width);
-            
-            for y in 0..copy_height {
-                let src_offset = y * state.canvas.stride;
-                let dst_offset = y * drm.width;
+    // Only copy to DRM framebuffer when there's actual damage
+    if has_damage {
+        if let Some(drm) = drm_info {
+            unsafe {
+                let fb_pixels = std::slice::from_raw_parts_mut(drm.fb_ptr, drm.width * drm.height);
+                let canvas_pixels = state.canvas.as_slice();
+                let copy_height = state.canvas.height.min(drm.height);
+                let copy_width = state.canvas.width.min(drm.width);
                 
-                if src_offset + copy_width <= canvas_pixels.len() && 
-                   dst_offset + copy_width <= fb_pixels.len() {
-                    std::ptr::copy_nonoverlapping(
-                        canvas_pixels.as_ptr().add(src_offset),
-                        fb_pixels.as_mut_ptr().add(dst_offset),
-                        copy_width
-                    );
+                for y in 0..copy_height {
+                    let src_offset = y * state.canvas.stride;
+                    let dst_offset = y * drm.width;
+                    
+                    if src_offset + copy_width <= canvas_pixels.len() && 
+                       dst_offset + copy_width <= fb_pixels.len() {
+                        std::ptr::copy_nonoverlapping(
+                            canvas_pixels.as_ptr().add(src_offset),
+                            fb_pixels.as_mut_ptr().add(dst_offset),
+                            copy_width
+                        );
+                    }
                 }
             }
         }
     }
     
-    let time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u32;
-    
-    for callback in state.frame_callbacks.drain(..) {
-        callback.done(time);
+    // Only process frame callbacks when there's damage or callbacks waiting
+    if has_damage || has_frame_callbacks {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u32;
+        
+        for callback in state.frame_callbacks.drain(..) {
+            callback.done(time);
+        }
+        
+        display.flush_clients().ok();
     }
-    
-    display.flush_clients().ok();
 }
 
 struct NestedLoopData {
