@@ -87,27 +87,33 @@ impl Dispatch<WlSurface, ()> for State {
                 state.frame_callbacks.push(cb);
             }
             wl_surface::Request::Damage { x, y, width, height } => {
-                if let Some(window) = state.get_window_by_surface(resource) {
+                let damage_info = state.get_window_by_surface(resource).map(|window| {
+                    window.needs_redraw = true;
                     let g = window.geometry;
-                    state.damage_tracker.add_damage(crate::state::Rectangle {
+                    crate::state::Rectangle {
                         x: g.x + x,
                         y: g.y + TITLE_BAR_HEIGHT + y,
                         width,
                         height,
-                    });
-                    window.needs_redraw = true;
+                    }
+                });
+                if let Some(rect) = damage_info {
+                    state.damage_tracker.add_damage(rect);
                 }
             }
             wl_surface::Request::DamageBuffer { x, y, width, height } => {
-                if let Some(window) = state.get_window_by_surface(resource) {
+                let damage_info = state.get_window_by_surface(resource).map(|window| {
+                    window.needs_redraw = true;
                     let g = window.geometry;
-                    state.damage_tracker.add_damage(crate::state::Rectangle {
+                    crate::state::Rectangle {
                         x: g.x + x,
                         y: g.y + TITLE_BAR_HEIGHT + y,
                         width,
                         height,
-                    });
-                    window.needs_redraw = true;
+                    }
+                });
+                if let Some(rect) = damage_info {
+                    state.damage_tracker.add_damage(rect);
                 }
             }
             wl_surface::Request::Destroy => {
