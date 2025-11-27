@@ -65,10 +65,13 @@ impl Dispatch<WlSurface, ()> for State {
             }
             wl_surface::Request::Commit => {
                 if let Some(window) = state.get_window_by_surface(resource) {
+                    // If pending_buffer is Some, use it
+                    // If pending_buffer is None, keep the existing buffer (double-buffering)
                     if let Some(buffer) = window.pending_buffer.take() {
                         window.buffer = Some(buffer);
-                        window.mapped = true;
                     }
+                    // Window stays mapped as long as it has a buffer
+                    window.mapped = window.buffer.is_some();
                 }
             }
             wl_surface::Request::Frame { callback } => {

@@ -673,8 +673,22 @@ impl State {
     }
     
     pub fn set_focus(&mut self, window_id: WindowId) {
+        // For now, just update focus without sending configure events
+        // to test if configure events are causing the transparency issue
         self.set_focus_without_relayout(window_id);
-        self.relayout_windows();
+    }
+    
+    fn send_configure_to_window(&mut self, window_id: WindowId) {
+        if let Some(window) = self.windows.iter().find(|w| w.id == window_id) {
+            let geometry = window.geometry;
+            let xdg_surface = window.xdg_surface.clone();
+            let xdg_toplevel = window.xdg_toplevel.clone();
+            let states = self.get_toplevel_states(window_id);
+            let serial = self.next_keyboard_serial();
+            
+            xdg_toplevel.configure(geometry.width, geometry.height, states);
+            xdg_surface.configure(serial);
+        }
     }
     
     pub fn set_focus_without_relayout(&mut self, window_id: WindowId) {
