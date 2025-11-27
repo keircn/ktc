@@ -132,10 +132,16 @@ impl State {
         });
     }
 
-    pub fn process_screencopy_frames(&mut self) {
-        let frames = std::mem::take(&mut self.screencopy_frames);
+    pub fn process_screencopy_frames(&mut self, has_damage: bool) {
+        let mut frames = std::mem::take(&mut self.screencopy_frames);
+        let mut deferred = Vec::new();
 
-        for pending in frames {
+        for pending in frames.drain(..) {
+            if pending.with_damage && !has_damage {
+                deferred.push(pending);
+                continue;
+            }
+
             if self.copy_frame_to_buffer(&pending) {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -153,6 +159,8 @@ impl State {
                 pending.frame.failed();
             }
         }
+
+        self.screencopy_frames = deferred;
     }
 
     fn copy_frame_to_buffer(&mut self, pending: &PendingScreencopy) -> bool {

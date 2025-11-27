@@ -495,10 +495,8 @@ fn render_frame(
         std::num::NonZeroU32::new(height as u32).unwrap(),
     ).ok();
 
-    loop_data.state.canvas.clear_with_pattern();
-    
-    let mut buffers_to_release = Vec::new();
     let focused_id = loop_data.state.focused_window;
+    let mut has_damage = false;
     
     let window_infos: Vec<_> = loop_data.state.windows.iter()
         .filter(|w| w.mapped)
@@ -510,22 +508,31 @@ fn render_frame(
             Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
         })
         .collect();
-    
-    for (_, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
-        if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
-            let pixels_copy: Vec<u32> = pixels.to_vec();
-            loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
-            buffers_to_release.push(wl_buffer.clone());
+
+    let mut buffers_to_release = Vec::new();
+
+    if !window_infos.is_empty() {
+        loop_data.state.canvas.clear_with_pattern();
+        
+        for (_, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+            if let Some(pixels) = loop_data.state.get_buffer_pixels(wl_buffer) {
+                let pixels_copy: Vec<u32> = pixels.to_vec();
+                loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
+                buffers_to_release.push(wl_buffer.clone());
+                has_damage = true;
+            }
         }
+        
+        for (_, geometry, _, _, _, is_focused) in &window_infos {
+            let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
+            let thickness = if *is_focused { 3 } else { 1 };
+            loop_data.state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
+        }
+    } else if loop_data.state.windows.is_empty() {
+        loop_data.state.canvas.clear_with_pattern();
     }
     
-    for (_, geometry, _, _, _, is_focused) in &window_infos {
-        let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
-        let thickness = if *is_focused { 3 } else { 1 };
-        loop_data.state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
-    }
-    
-    loop_data.state.process_screencopy_frames();
+    loop_data.state.process_screencopy_frames(has_damage);
     
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
     buffer.copy_from_slice(loop_data.state.canvas.as_slice());
@@ -554,11 +561,8 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         display.flush_clients().ok();
     }
     
-    state.canvas.clear_with_pattern();
-
     let focused_id = state.focused_window;
-    let mut buffers_to_release = Vec::new();
-    let mapped_count = state.windows.iter().filter(|w| w.mapped).count();
+    let mut has_damage = false;
     
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
@@ -571,25 +575,34 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         })
         .collect();
     
-    for (window_id, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
-        if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
-            if *buf_width as i32 != geometry.width || *buf_height as i32 != geometry.height {
-                log::info!("Window {} buffer {}x{} != geometry {}x{}", 
-                    window_id, buf_width, buf_height, geometry.width, geometry.height);
+    let mut buffers_to_release = Vec::new();
+
+    if !window_infos.is_empty() {
+        state.canvas.clear_with_pattern();
+        
+        for (window_id, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+            if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
+                if *buf_width as i32 != geometry.width || *buf_height as i32 != geometry.height {
+                    log::info!("Window {} buffer {}x{} != geometry {}x{}", 
+                        window_id, buf_width, buf_height, geometry.width, geometry.height);
+                }
+                let pixels_copy: Vec<u32> = client_pixels.to_vec();
+                state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
+                buffers_to_release.push(wl_buffer.clone());
+                has_damage = true;
             }
-            let pixels_copy: Vec<u32> = client_pixels.to_vec();
-            state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
-            buffers_to_release.push(wl_buffer.clone());
         }
+        
+        for (_, geometry, _, _, _, is_focused) in &window_infos {
+            let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
+            let thickness = if *is_focused { 3 } else { 1 };
+            state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
+        }
+    } else if state.windows.is_empty() {
+        state.canvas.clear_with_pattern();
     }
     
-    for (_, geometry, _, _, _, is_focused) in &window_infos {
-        let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
-        let thickness = if *is_focused { 3 } else { 1 };
-        state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
-    }
-    
-    state.process_screencopy_frames();
+    state.process_screencopy_frames(has_damage);
     
     if let Some(drm) = drm_info {
         unsafe {
