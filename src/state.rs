@@ -457,27 +457,27 @@ impl Canvas {
     pub fn draw_cursor(&mut self, x: i32, y: i32) {
         self.save_under_cursor(x, y);
         
+        // W = white, B = black outline, . = transparent
         const CURSOR: &[&str] = &[
-            "X...............",
-            "XX..............",
-            "X.X.............",
-            "X..X............",
-            "X...X...........",
-            "X....X..........",
-            "X.....X.........",
-            "X......X........",
-            "X.......X.......",
-            "X........X......",
-            "X.........X.....",
-            "X..........X....",
-            "X......XXXXX....",
-            "X...X..X........",
-            "X..X.X..X.......",
-            "X.X..X..X.......",
-            "XX....X..X......",
-            "X......X..X.....",
-            ".......X..X.....",
-            "........XX......",
+            "BW",
+            "BWWB",
+            "BWWWB",
+            "BWWWWB",
+            "BWWWWWB",
+            "BWWWWWWB",
+            "BWWWWWWWB",
+            "BWWWWWWWWB",
+            "BWWWWWWWWWB",
+            "BWWWWWWWWWWB",
+            "BWWWWWWBBBBB",
+            "BWWWBWWB",
+            "BWWBBWWWB",
+            "BWB.BWWWB",
+            "BB..BWWWB",
+            "B....BWWWB",
+            ".....BWWWB",
+            "......BWWB",
+            "......BBB",
         ];
         
         for (dy, row) in CURSOR.iter().enumerate() {
@@ -486,8 +486,8 @@ impl Canvas {
                 let py = y as usize + dy;
                 if px < self.width && py < self.height {
                     let color = match ch {
-                        'X' => 0xFFFFFFFF,
-                        '.' => 0xFF000000,
+                        'W' => 0xFFFFFFFF,
+                        'B' => 0xFF000000,
                         _ => continue,
                     };
                     self.pixels[py * self.stride + px] = color;
