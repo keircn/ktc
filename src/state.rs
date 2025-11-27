@@ -10,6 +10,8 @@ use crate::protocols::screencopy::PendingScreencopy;
 pub type WindowId = u64;
 pub type OutputId = u64;
 
+pub const TITLE_BAR_HEIGHT: i32 = 24;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Rectangle {
     pub x: i32,
@@ -227,6 +229,75 @@ impl Canvas {
 
     pub fn as_mut_slice(&mut self) -> &mut [u32] {
         &mut self.pixels
+    }
+
+    pub fn draw_decorations(&mut self, x: i32, y: i32, width: i32, height: i32, title_height: i32, is_focused: bool) {
+        let title_bg = if is_focused { 0xFF2D5A88 } else { 0xFF3C3C3C };
+        let border_color = if is_focused { 0xFF4A9EFF } else { 0xFF505050 };
+        
+        let x = x.max(0) as usize;
+        let y = y.max(0) as usize;
+        let width = width as usize;
+        let title_height = title_height as usize;
+        let total_height = height as usize + title_height;
+        
+        // Title bar
+        for dy in 0..title_height {
+            for dx in 0..width {
+                let px = x + dx;
+                let py = y + dy;
+                if px < self.width && py < self.height {
+                    self.pixels[py * self.stride + px] = title_bg;
+                }
+            }
+        }
+        
+        // Frame border (around title + content)
+        // Top
+        for dx in 0..width {
+            let px = x + dx;
+            if px < self.width && y < self.height {
+                self.pixels[y * self.stride + px] = border_color;
+            }
+        }
+        // Bottom
+        let bottom_y = y + total_height.saturating_sub(1);
+        if bottom_y < self.height {
+            for dx in 0..width {
+                let px = x + dx;
+                if px < self.width {
+                    self.pixels[bottom_y * self.stride + px] = border_color;
+                }
+            }
+        }
+        // Left
+        for dy in 0..total_height {
+            let py = y + dy;
+            if x < self.width && py < self.height {
+                self.pixels[py * self.stride + x] = border_color;
+            }
+        }
+        // Right
+        let right_x = x + width.saturating_sub(1);
+        if right_x < self.width {
+            for dy in 0..total_height {
+                let py = y + dy;
+                if py < self.height {
+                    self.pixels[py * self.stride + right_x] = border_color;
+                }
+            }
+        }
+        
+        // Line under title bar
+        let title_bottom = y + title_height;
+        if title_bottom < self.height {
+            for dx in 0..width {
+                let px = x + dx;
+                if px < self.width {
+                    self.pixels[title_bottom * self.stride + px] = border_color;
+                }
+            }
+        }
     }
 }
 
@@ -586,7 +657,9 @@ impl State {
             let states = self.get_toplevel_states(window_id);
             let serial = self.next_keyboard_serial();
             
-            xdg_toplevel.configure(geometry.width, geometry.height, states);
+            // Tell client to render smaller to leave room for title bar
+            let client_height = (geometry.height - TITLE_BAR_HEIGHT).max(1);
+            xdg_toplevel.configure(geometry.width, client_height, states);
             xdg_surface.configure(serial);
         }
     }

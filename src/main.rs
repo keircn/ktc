@@ -20,7 +20,7 @@ use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use std::sync::Arc;
-use state::State;
+use state::{State, TITLE_BAR_HEIGHT};
 
 #[derive(Parser)]
 #[command(name = "ktc")]
@@ -517,13 +517,19 @@ fn render_frame(
         for (_, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
             if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(wl_buffer) {
                 let pixels_copy: Vec<u32> = pixels.to_vec();
-                loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, geometry.y);
+                
+                // Draw decorations first
+                loop_data.state.canvas.draw_decorations(
+                    geometry.x, geometry.y, 
+                    *buf_width as i32, *buf_height as i32,
+                    TITLE_BAR_HEIGHT, *is_focused
+                );
+                
+                // Blit content below title bar
+                let content_y = geometry.y + TITLE_BAR_HEIGHT;
+                loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, content_y);
                 buffers_to_release.push(wl_buffer.clone());
                 has_damage = true;
-                
-                let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
-                let thickness = if *is_focused { 3 } else { 1 };
-                loop_data.state.canvas.draw_border(geometry.x, geometry.y, *buf_width as i32, *buf_height as i32, border_color, thickness);
             }
         }
     } else if loop_data.state.windows.is_empty() {
@@ -578,23 +584,27 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     if !window_infos.is_empty() {
         state.canvas.clear_with_pattern();
         
-        for (window_id, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+        for (window_id, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
             if let Some((client_pixels, stride)) = state.get_buffer_pixels(&wl_buffer) {
                 if *buf_width as i32 != geometry.width || *buf_height as i32 != geometry.height {
                     log::info!("Window {} buffer {}x{} != geometry {}x{}", 
                         window_id, buf_width, buf_height, geometry.width, geometry.height);
                 }
                 let pixels_copy: Vec<u32> = client_pixels.to_vec();
-                state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, geometry.y);
+                
+                // Draw decorations first
+                state.canvas.draw_decorations(
+                    geometry.x, geometry.y,
+                    *buf_width as i32, *buf_height as i32,
+                    TITLE_BAR_HEIGHT, *is_focused
+                );
+                
+                // Blit content below title bar
+                let content_y = geometry.y + TITLE_BAR_HEIGHT;
+                state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, content_y);
                 buffers_to_release.push(wl_buffer.clone());
                 has_damage = true;
             }
-        }
-        
-        for (_, geometry, _, buf_width, buf_height, is_focused) in &window_infos {
-            let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
-            let thickness = if *is_focused { 3 } else { 1 };
-            state.canvas.draw_border(geometry.x, geometry.y, *buf_width as i32, *buf_height as i32, border_color, thickness);
         }
     } else if state.windows.is_empty() {
         state.canvas.clear_with_pattern();
