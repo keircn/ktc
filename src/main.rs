@@ -551,10 +551,9 @@ fn render_frame(
     ).ok();
 
     let focused_id = loop_data.state.focused_window;
-    let needs_full_redraw = loop_data.state.damage_tracker.is_full_damage();
     
     let windows_to_render: Vec<_> = loop_data.state.windows.iter()
-        .filter(|w| w.mapped && w.buffer.is_some() && (w.needs_redraw || needs_full_redraw))
+        .filter(|w| w.mapped && w.buffer.is_some())
         .map(|w| w.id)
         .collect();
     
@@ -562,11 +561,7 @@ fn render_frame(
         loop_data.state.update_window_pixel_cache(*id);
     }
 
-    let mut any_window_redrawn = false;
-
-    if needs_full_redraw {
-        loop_data.state.canvas.clear_with_pattern();
-    }
+    loop_data.state.canvas.clear_with_pattern();
     
     for id in &windows_to_render {
         if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
@@ -587,7 +582,6 @@ fn render_frame(
                     win.geometry.x, 
                     content_y
                 );
-                any_window_redrawn = true;
             }
         }
     }
@@ -601,17 +595,11 @@ fn render_frame(
         }
     }
     
-    if loop_data.state.windows.is_empty() && needs_full_redraw {
-        loop_data.state.canvas.clear_with_pattern();
-        any_window_redrawn = true;
-    }
-    
     if loop_data.state.cursor_visible {
         loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
     }
     
-    let screencopy_damage = any_window_redrawn || has_damage;
-    loop_data.state.process_screencopy_frames(screencopy_damage);
+    loop_data.state.process_screencopy_frames(has_damage);
     
     loop_data.state.damage_tracker.clear();
     
@@ -647,22 +635,17 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     }
     
     let focused_id = state.focused_window;
-    let needs_full_redraw = state.damage_tracker.is_full_damage();
     
     let windows_to_render: Vec<_> = state.windows.iter()
-        .filter(|w| w.mapped && w.buffer.is_some() && (w.needs_redraw || needs_full_redraw))
+        .filter(|w| w.mapped && w.buffer.is_some())
         .map(|w| w.id)
         .collect();
     
     for id in &windows_to_render {
         state.update_window_pixel_cache(*id);
     }
-    
-    let mut any_window_redrawn = false;
 
-    if needs_full_redraw {
-        state.canvas.clear_with_pattern();
-    }
+    state.canvas.clear_with_pattern();
     
     for id in &windows_to_render {
         if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
@@ -683,7 +666,6 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                     win.geometry.x,
                     content_y
                 );
-                any_window_redrawn = true;
             }
         }
     }
@@ -697,17 +679,11 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         }
     }
     
-    if state.windows.is_empty() && needs_full_redraw {
-        state.canvas.clear_with_pattern();
-        any_window_redrawn = true;
-    }
-    
     if state.cursor_visible {
         state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
     }
     
-    let screencopy_damage = any_window_redrawn || has_damage;
-    state.process_screencopy_frames(screencopy_damage);
+    state.process_screencopy_frames(has_damage);
     
     state.damage_tracker.clear();
     
