@@ -577,12 +577,24 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
 
     let focused_id = state.focused_window;
     
+    // Debug: log all windows and their state
+    for w in &state.windows {
+        log::debug!("[render] Window {} mapped={} has_buffer={} geometry={}x{} at ({},{})", 
+            w.id, w.mapped, w.buffer.is_some(), 
+            w.geometry.width, w.geometry.height, w.geometry.x, w.geometry.y);
+    }
+    
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
         .filter_map(|w| {
             let wl_buffer = w.buffer.clone()?;
             let buffer_id = wl_buffer.id().protocol_id();
-            let buffer_data = state.buffers.get(&buffer_id)?;
+            let buffer_data = state.buffers.get(&buffer_id);
+            if buffer_data.is_none() {
+                log::warn!("[render] Window {} has buffer but no buffer_data for id {}", w.id, buffer_id);
+                return None;
+            }
+            let buffer_data = buffer_data.unwrap();
             let is_focused = focused_id == Some(w.id);
             Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
         })
@@ -592,13 +604,21 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
             let pixels_copy: Vec<u32> = client_pixels.to_vec();
             state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
+        } else {
+            log::warn!("[render] Failed to get pixels for buffer {:?}", wl_buffer.id());
         }
     }
     
-    for (geometry, _, _, _, is_focused) in &window_infos {
-        let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
-        let thickness = if *is_focused { 3 } else { 1 };
-        state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
+    // Draw borders for ALL windows (mapped or not) to show tile positions
+    for window in &state.windows {
+        let is_focused = focused_id == Some(window.id);
+        let border_color = if is_focused { 0xFF4A9EFF } else { 0xFF404040 };
+        let thickness = if is_focused { 3 } else { 1 };
+        state.canvas.draw_border(
+            window.geometry.x, window.geometry.y, 
+            window.geometry.width, window.geometry.height, 
+            border_color, thickness
+        );
     }
     
     if let Some(drm) = drm_info {

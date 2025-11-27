@@ -799,11 +799,19 @@ impl State {
             None => return vec![],
         };
         
+        // Get the focused window's client
+        let focused_client = self.windows.iter()
+            .find(|w| w.id == focused_id)
+            .and_then(|w| w.wl_surface.client());
+        
+        let focused_client = match focused_client {
+            Some(c) => c,
+            None => return vec![],
+        };
+        
+        // Return keyboards that belong to the same client as the focused window
         self.keyboards.iter()
-            .filter(|kb| {
-                let kb_id = kb.id();
-                self.keyboard_to_window.get(&kb_id) == Some(&focused_id)
-            })
+            .filter(|kb| kb.client().as_ref() == Some(&focused_client))
             .cloned()
             .collect()
     }
