@@ -584,12 +584,8 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     if !window_infos.is_empty() {
         state.canvas.clear_with_pattern();
         
-        for (window_id, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
+        for (_, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
             if let Some((client_pixels, stride)) = state.get_buffer_pixels(&wl_buffer) {
-                if *buf_width as i32 != geometry.width || *buf_height as i32 != geometry.height {
-                    log::info!("Window {} buffer {}x{} != geometry {}x{}", 
-                        window_id, buf_width, buf_height, geometry.width, geometry.height);
-                }
                 let pixels_copy: Vec<u32> = client_pixels.to_vec();
                 
                 // Draw decorations first
