@@ -53,6 +53,7 @@ pub struct DamageTracker {
     full_damage: bool,
     frame_count: u64,
     last_damage_frame: u64,
+    cursor_only: bool,
 }
 
 impl DamageTracker {
@@ -62,6 +63,7 @@ impl DamageTracker {
             full_damage: true,
             frame_count: 0,
             last_damage_frame: 0,
+            cursor_only: false,
         }
     }
 
@@ -69,6 +71,7 @@ impl DamageTracker {
         if rect.is_empty() {
             return;
         }
+        self.cursor_only = false;
         self.last_damage_frame = self.frame_count;
         if self.regions.len() >= 16 {
             self.full_damage = true;
@@ -77,15 +80,27 @@ impl DamageTracker {
             self.regions.push(rect);
         }
     }
+    
+    pub fn add_cursor_damage(&mut self) {
+        if !self.full_damage && self.regions.is_empty() {
+            self.cursor_only = true;
+        }
+        self.last_damage_frame = self.frame_count;
+    }
 
     pub fn mark_full_damage(&mut self) {
         self.full_damage = true;
+        self.cursor_only = false;
         self.regions.clear();
         self.last_damage_frame = self.frame_count;
     }
 
     pub fn has_damage(&self) -> bool {
-        self.full_damage || !self.regions.is_empty()
+        self.full_damage || !self.regions.is_empty() || self.cursor_only
+    }
+    
+    pub fn is_cursor_only(&self) -> bool {
+        self.cursor_only && !self.full_damage && self.regions.is_empty()
     }
 
     pub fn is_full_damage(&self) -> bool {
@@ -99,6 +114,7 @@ impl DamageTracker {
     pub fn clear(&mut self) {
         self.regions.clear();
         self.full_damage = false;
+        self.cursor_only = false;
         self.frame_count += 1;
     }
 
@@ -181,6 +197,7 @@ impl Output {
 
 pub struct Canvas {
     pub pixels: Vec<u32>,
+    pub background: Vec<u32>,
     pub width: usize,
     pub height: usize,
     pub stride: usize,
@@ -190,8 +207,10 @@ impl Canvas {
     pub fn new(width: usize, height: usize) -> Self {
         let stride = width;
         let pixels = vec![0xFF1A1A2E; width * height];
+        let background = vec![0xFF1A1A2E; width * height];
         Self {
             pixels,
+            background,
             width,
             height,
             stride,
@@ -204,6 +223,7 @@ impl Canvas {
             self.height = height;
             self.stride = width;
             self.pixels = vec![0xFF1A1A2E; width * height];
+            self.background = vec![0xFF1A1A2E; width * height];
         }
     }
 
@@ -463,6 +483,30 @@ impl Canvas {
                     };
                     self.pixels[py * self.stride + px] = color;
                 }
+            }
+        }
+    }
+    
+    pub fn save_background(&mut self) {
+        self.background.copy_from_slice(&self.pixels);
+    }
+    
+    pub fn restore_cursor_region(&mut self, x: i32, y: i32) {
+        let x = x.max(0) as usize;
+        let y = y.max(0) as usize;
+        const CURSOR_W: usize = 16;
+        const CURSOR_H: usize = 20;
+        
+        for dy in 0..CURSOR_H {
+            let py = y + dy;
+            if py >= self.height {
+                break;
+            }
+            let row_start = py * self.stride + x;
+            let copy_width = CURSOR_W.min(self.width.saturating_sub(x));
+            if row_start + copy_width <= self.pixels.len() {
+                self.pixels[row_start..row_start + copy_width]
+                    .copy_from_slice(&self.background[row_start..row_start + copy_width]);
             }
         }
     }
@@ -1229,18 +1273,8 @@ impl State {
         self.pointer_y = y;
         
         if self.cursor_visible && (old_x != self.cursor_x || old_y != self.cursor_y) {
-            self.damage_tracker.add_damage(Rectangle {
-                x: old_x,
-                y: old_y,
-                width: 20,
-                height: 24,
-            });
-            self.damage_tracker.add_damage(Rectangle {
-                x: self.cursor_x,
-                y: self.cursor_y,
-                width: 20,
-                height: 24,
-            });
+            self.last_cursor_pos = (old_x, old_y);
+            self.damage_tracker.add_cursor_damage();
         }
         
         let window_id = self.window_at(x, y);

@@ -540,6 +540,7 @@ fn render_frame(
     let has_pending_screencopy = !loop_data.state.screencopy_frames.is_empty();
     let has_frame_callbacks = !loop_data.state.frame_callbacks.is_empty();
     let has_damage = loop_data.state.damage_tracker.has_damage();
+    let cursor_only = loop_data.state.damage_tracker.is_cursor_only();
     
     if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
         return;
@@ -550,53 +551,63 @@ fn render_frame(
         std::num::NonZeroU32::new(height as u32).unwrap(),
     ).ok();
 
-    let focused_id = loop_data.state.focused_window;
-    
-    let windows_to_render: Vec<_> = loop_data.state.windows.iter()
-        .filter(|w| w.mapped && w.buffer.is_some())
-        .map(|w| w.id)
-        .collect();
-    
-    for id in &windows_to_render {
-        loop_data.state.update_window_pixel_cache(*id);
-    }
+    if cursor_only && !has_pending_screencopy {
+        let (old_x, old_y) = loop_data.state.last_cursor_pos;
+        loop_data.state.canvas.restore_cursor_region(old_x, old_y);
+        if loop_data.state.cursor_visible {
+            loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
+        }
+    } else {
+        let focused_id = loop_data.state.focused_window;
+        
+        let windows_to_render: Vec<_> = loop_data.state.windows.iter()
+            .filter(|w| w.mapped && w.buffer.is_some())
+            .map(|w| w.id)
+            .collect();
+        
+        for id in &windows_to_render {
+            loop_data.state.update_window_pixel_cache(*id);
+        }
 
-    loop_data.state.canvas.clear_with_pattern();
-    
-    for id in &windows_to_render {
-        if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
-            if win.cache_width > 0 && win.cache_height > 0 {
-                let is_focused = focused_id == Some(*id);
-                loop_data.state.canvas.draw_decorations(
-                    win.geometry.x, win.geometry.y, 
-                    win.cache_width as i32, win.cache_height as i32,
-                    TITLE_BAR_HEIGHT, is_focused
-                );
-                
-                let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
-                loop_data.state.canvas.blit_fast(
-                    &win.pixel_cache, 
-                    win.cache_width, 
-                    win.cache_height, 
-                    win.cache_stride, 
-                    win.geometry.x, 
-                    content_y
-                );
+        loop_data.state.canvas.clear_with_pattern();
+        
+        for id in &windows_to_render {
+            if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
+                if win.cache_width > 0 && win.cache_height > 0 {
+                    let is_focused = focused_id == Some(*id);
+                    loop_data.state.canvas.draw_decorations(
+                        win.geometry.x, win.geometry.y, 
+                        win.cache_width as i32, win.cache_height as i32,
+                        TITLE_BAR_HEIGHT, is_focused
+                    );
+                    
+                    let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
+                    loop_data.state.canvas.blit_fast(
+                        &win.pixel_cache, 
+                        win.cache_width, 
+                        win.cache_height, 
+                        win.cache_stride, 
+                        win.geometry.x, 
+                        content_y
+                    );
+                }
             }
         }
-    }
-    
-    for id in &windows_to_render {
-        if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == *id) {
-            win.needs_redraw = false;
-            if let Some(ref buffer) = win.buffer {
-                buffer.release();
+        
+        for id in &windows_to_render {
+            if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == *id) {
+                win.needs_redraw = false;
+                if let Some(ref buffer) = win.buffer {
+                    buffer.release();
+                }
             }
         }
-    }
-    
-    if loop_data.state.cursor_visible {
-        loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
+        
+        loop_data.state.canvas.save_background();
+        
+        if loop_data.state.cursor_visible {
+            loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
+        }
     }
     
     loop_data.state.process_screencopy_frames(has_damage);
@@ -629,58 +640,69 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     let has_pending_screencopy = !state.screencopy_frames.is_empty();
     let has_frame_callbacks = !state.frame_callbacks.is_empty();
     let has_damage = state.damage_tracker.has_damage();
+    let cursor_only = state.damage_tracker.is_cursor_only();
     
     if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
         return;
     }
     
-    let focused_id = state.focused_window;
-    
-    let windows_to_render: Vec<_> = state.windows.iter()
-        .filter(|w| w.mapped && w.buffer.is_some())
-        .map(|w| w.id)
-        .collect();
-    
-    for id in &windows_to_render {
-        state.update_window_pixel_cache(*id);
-    }
+    if cursor_only && !has_pending_screencopy {
+        let (old_x, old_y) = state.last_cursor_pos;
+        state.canvas.restore_cursor_region(old_x, old_y);
+        if state.cursor_visible {
+            state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
+        }
+    } else {
+        let focused_id = state.focused_window;
+        
+        let windows_to_render: Vec<_> = state.windows.iter()
+            .filter(|w| w.mapped && w.buffer.is_some())
+            .map(|w| w.id)
+            .collect();
+        
+        for id in &windows_to_render {
+            state.update_window_pixel_cache(*id);
+        }
 
-    state.canvas.clear_with_pattern();
-    
-    for id in &windows_to_render {
-        if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
-            if win.cache_width > 0 && win.cache_height > 0 {
-                let is_focused = focused_id == Some(*id);
-                state.canvas.draw_decorations(
-                    win.geometry.x, win.geometry.y,
-                    win.cache_width as i32, win.cache_height as i32,
-                    TITLE_BAR_HEIGHT, is_focused
-                );
-                
-                let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
-                state.canvas.blit_fast(
-                    &win.pixel_cache,
-                    win.cache_width,
-                    win.cache_height,
-                    win.cache_stride,
-                    win.geometry.x,
-                    content_y
-                );
+        state.canvas.clear_with_pattern();
+        
+        for id in &windows_to_render {
+            if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
+                if win.cache_width > 0 && win.cache_height > 0 {
+                    let is_focused = focused_id == Some(*id);
+                    state.canvas.draw_decorations(
+                        win.geometry.x, win.geometry.y,
+                        win.cache_width as i32, win.cache_height as i32,
+                        TITLE_BAR_HEIGHT, is_focused
+                    );
+                    
+                    let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
+                    state.canvas.blit_fast(
+                        &win.pixel_cache,
+                        win.cache_width,
+                        win.cache_height,
+                        win.cache_stride,
+                        win.geometry.x,
+                        content_y
+                    );
+                }
             }
         }
-    }
-    
-    for id in &windows_to_render {
-        if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
-            win.needs_redraw = false;
-            if let Some(ref buffer) = win.buffer {
-                buffer.release();
+        
+        for id in &windows_to_render {
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
+                win.needs_redraw = false;
+                if let Some(ref buffer) = win.buffer {
+                    buffer.release();
+                }
             }
         }
-    }
-    
-    if state.cursor_visible {
-        state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
+        
+        state.canvas.save_background();
+        
+        if state.cursor_visible {
+            state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
+        }
     }
     
     state.process_screencopy_frames(has_damage);
