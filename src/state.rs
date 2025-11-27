@@ -566,10 +566,15 @@ impl State {
         if let Some(pos) = self.windows.iter().position(|w| w.id == id) {
             self.windows.swap_remove(pos);
         }
-        if self.focused_window == Some(id) {
-            self.focused_window = self.windows.first().map(|w| w.id);
-        }
         self.keyboard_to_window.retain(|_, window_id| *window_id != id);
+        
+        if self.focused_window == Some(id) {
+            self.focused_window = None;
+            if let Some(first_window) = self.windows.first() {
+                let new_focus_id = first_window.id;
+                self.set_focus(new_focus_id);
+            }
+        }
     }
     
     pub fn focus_next(&mut self) {
