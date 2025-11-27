@@ -361,35 +361,39 @@ fn run_standalone() {
                         handler.process_events(|action| {
                             match action {
                                 InputAction::ExitCompositor => {
-                                    log::info!("Ctrl+Alt+Q pressed - initiating shutdown");
+                                    log::info!("[main] Action: ExitCompositor");
                                     session::request_shutdown();
                                 }
                                 InputAction::LaunchTerminal => {
-                                    log::info!("Alt+T pressed - launching foot terminal");
+                                    log::info!("[main] Action: LaunchTerminal");
                                     
                                     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                                         .unwrap_or_else(|_| "/tmp".to_string());
                                     
+                                    log::info!("[main] Spawning foot with WAYLAND_DISPLAY={}, XDG_RUNTIME_DIR={}", 
+                                        &data.socket_name, &xdg_runtime_dir);
+                                    
                                     match std::process::Command::new("foot")
                                         .env("WAYLAND_DISPLAY", &data.socket_name)
-                                        .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
+                                        .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
                                         .spawn() {
                                         Ok(child) => {
                                             let pid = child.id();
-                                            log::info!("foot launched with PID {} on {}", pid, data.socket_name);
+                                            log::info!("[main] foot launched with PID {}", pid);
                                             session::register_child(pid);
                                         }
                                         Err(e) => {
-                                            log::error!("Failed to launch foot: {}", e);
-                                            log::info!("Make sure foot is installed: sudo apt install foot");
+                                            log::error!("[main] Failed to launch foot: {}", e);
                                         }
                                     }
                                 }
                                 InputAction::FocusNext => {
+                                    log::info!("[main] Action: FocusNext");
                                     data.state.focus_next();
                                     data.display.flush_clients().ok();
                                 }
                                 InputAction::FocusPrev => {
+                                    log::info!("[main] Action: FocusPrev");
                                     data.state.focus_prev();
                                     data.display.flush_clients().ok();
                                 }
