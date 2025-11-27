@@ -2,6 +2,7 @@ mod state;
 mod protocols;
 mod input;
 mod logging;
+mod session;
 
 use clap::{Parser, Subcommand};
 use input::KeyState;
@@ -231,7 +232,17 @@ fn run_standalone() {
     use std::fs::OpenOptions;
     use input::{InputHandler, InputAction};
     
-    let _tty_guard = setup_tty();
+    let _session = match session::Session::new() {
+        Ok(s) => {
+            log::info!("Session initialized on VT{}", s.vt_num());
+            Some(s)
+        }
+        Err(e) => {
+            log::warn!("Failed to initialize session: {}", e);
+            log::warn!("TTY may not be properly restored on exit");
+            None
+        }
+    };
     
     let (mut display, socket) = setup_wayland();
     
@@ -344,13 +355,12 @@ fn run_standalone() {
                 |_, _, data| {
                     if let Some(ref mut handler) = data.input_handler {
                         handler.dispatch().ok();
-                        let mut should_exit = false;
                         
                         handler.process_events(|action| {
                             match action {
                                 InputAction::ExitCompositor => {
-                                    log::info!("Ctrl+Alt+Q pressed - exiting compositor");
-                                    should_exit = true;
+                                    log::info!("Ctrl+Alt+Q pressed - initiating shutdown");
+                                    session::request_shutdown();
                                 }
                                 InputAction::LaunchTerminal => {
                                     log::info!("Alt+T pressed - launching ghostty terminal");
@@ -363,7 +373,9 @@ fn run_standalone() {
                                         .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
                                         .spawn() {
                                         Ok(child) => {
-                                            log::info!("ghostty launched with PID {} on {}", child.id(), data.socket_name);
+                                            let pid = child.id();
+                                            log::info!("ghostty launched with PID {} on {}", pid, data.socket_name);
+                                            session::register_child(pid);
                                         }
                                         Err(e) => {
                                             log::error!("Failed to launch ghostty: {}", e);
@@ -389,10 +401,6 @@ fn run_standalone() {
                                 }
                             }
                         });
-                        
-                        if should_exit {
-                            std::process::exit(0);
-                        }
                     }
                     Ok(calloop::PostAction::Continue)
                 },
@@ -441,9 +449,13 @@ fn run_standalone() {
 
     log::info!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
     
-    loop {
-        calloop_loop.dispatch(None, &mut loop_data).expect("Event loop error");
+    while session::is_running() {
+        calloop_loop.dispatch(Some(std::time::Duration::from_millis(16)), &mut loop_data)
+            .expect("Event loop error");
     }
+    
+    log::info!("Main loop exited, cleaning up...");
+    // _session drops here, restoring TTY
 }
 
 fn render_frame(
@@ -662,70 +674,4 @@ fn setup_drm(device: &std::fs::File) -> Result<DrmInfo, Box<dyn std::error::Erro
         refresh,
         name: connector_name,
     })
-}
-
-struct TtyGuard {
-    fd: std::os::fd::RawFd,
-    old_mode: i32,
-}
-
-impl Drop for TtyGuard {
-    fn drop(&mut self) {
-        unsafe {
-            libc::ioctl(self.fd, 0x4B3A, self.old_mode);
-            libc::close(self.fd);
-        }
-        log::info!("TTY restored to text mode");
-    }
-}
-
-fn setup_tty() -> Option<TtyGuard> {
-    use std::os::fd::AsRawFd;
-    
-    let tty_path = std::fs::read_to_string("/sys/class/tty/tty0/active")
-        .ok()
-        .and_then(|s| {
-            let tty_name = s.trim();
-            if !tty_name.is_empty() {
-                Some(format!("/dev/{}", tty_name))
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "/dev/tty".to_string());
-    
-    log::info!("Attempting to open TTY: {}", tty_path);
-    
-    let tty = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&tty_path) {
-        Ok(f) => f,
-        Err(e) => {
-            log::warn!("Failed to open TTY {}: {}", tty_path, e);
-            return None;
-        }
-    };
-    
-    let fd = tty.as_raw_fd();
-    
-    unsafe {
-        let mut old_mode: i32 = 0;
-        if libc::ioctl(fd, 0x4B3B, &mut old_mode as *mut i32) < 0 {
-            log::warn!("Failed to get TTY mode (KDGETMODE)");
-            return None;
-        }
-        
-        const KD_GRAPHICS: i32 = 0x01;
-        if libc::ioctl(fd, 0x4B3A, KD_GRAPHICS) < 0 {
-            log::warn!("Failed to set TTY to graphics mode (KDSETMODE)");
-            return None;
-        }
-        
-        log::info!("TTY switched to graphics mode (old_mode={})", old_mode);
-        
-        std::mem::forget(tty);
-        
-        Some(TtyGuard { fd, old_mode })
-    }
 }

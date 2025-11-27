@@ -15,7 +15,7 @@ impl LibinputInterface for Interface {
     fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
         OpenOptions::new()
             .custom_flags(flags)
-            .read((flags & libc::O_RDWR != 0) || (flags & libc::O_RDONLY != 0))
+            .read(flags & libc::O_RDWR != 0)
             .write(flags & libc::O_RDWR != 0)
             .open(path)
             .map(|file| file.into())
