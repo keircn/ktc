@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 wayland-server = "0.31"
-wayland-protocols = { version = "0.32", features = ["server"] }
+wayland-protocols = { version = "0.32", features = ["server", "unstable"] }
 calloop = "0.14"
 winit = "0.30"
 softbuffer = "0.4"
