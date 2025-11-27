@@ -197,20 +197,26 @@ impl Output {
 
 pub struct Canvas {
     pub pixels: Vec<u32>,
-    pub background: Vec<u32>,
+    pub cursor_save: Vec<u32>,
+    pub cursor_save_x: i32,
+    pub cursor_save_y: i32,
     pub width: usize,
     pub height: usize,
     pub stride: usize,
 }
 
 impl Canvas {
+    const CURSOR_W: usize = 16;
+    const CURSOR_H: usize = 20;
+    
     pub fn new(width: usize, height: usize) -> Self {
         let stride = width;
         let pixels = vec![0xFF1A1A2E; width * height];
-        let background = vec![0xFF1A1A2E; width * height];
         Self {
             pixels,
-            background,
+            cursor_save: vec![0; Self::CURSOR_W * Self::CURSOR_H],
+            cursor_save_x: -100,
+            cursor_save_y: -100,
             width,
             height,
             stride,
@@ -223,7 +229,8 @@ impl Canvas {
             self.height = height;
             self.stride = width;
             self.pixels = vec![0xFF1A1A2E; width * height];
-            self.background = vec![0xFF1A1A2E; width * height];
+            self.cursor_save_x = -100;
+            self.cursor_save_y = -100;
         }
     }
 
@@ -448,6 +455,8 @@ impl Canvas {
     }
     
     pub fn draw_cursor(&mut self, x: i32, y: i32) {
+        self.save_under_cursor(x, y);
+        
         const CURSOR: &[&str] = &[
             "X...............",
             "XX..............",
@@ -487,28 +496,50 @@ impl Canvas {
         }
     }
     
-    pub fn save_background(&mut self) {
-        self.background.copy_from_slice(&self.pixels);
-    }
-    
-    pub fn restore_cursor_region(&mut self, x: i32, y: i32) {
+    fn save_under_cursor(&mut self, x: i32, y: i32) {
+        self.cursor_save_x = x;
+        self.cursor_save_y = y;
         let x = x.max(0) as usize;
         let y = y.max(0) as usize;
-        const CURSOR_W: usize = 16;
-        const CURSOR_H: usize = 20;
         
-        for dy in 0..CURSOR_H {
+        for dy in 0..Self::CURSOR_H {
             let py = y + dy;
             if py >= self.height {
                 break;
             }
-            let row_start = py * self.stride + x;
-            let copy_width = CURSOR_W.min(self.width.saturating_sub(x));
-            if row_start + copy_width <= self.pixels.len() {
-                self.pixels[row_start..row_start + copy_width]
-                    .copy_from_slice(&self.background[row_start..row_start + copy_width]);
+            for dx in 0..Self::CURSOR_W {
+                let px = x + dx;
+                if px >= self.width {
+                    break;
+                }
+                self.cursor_save[dy * Self::CURSOR_W + dx] = self.pixels[py * self.stride + px];
             }
         }
+    }
+    
+    pub fn restore_cursor(&mut self) {
+        if self.cursor_save_x < 0 && self.cursor_save_y < 0 {
+            return;
+        }
+        let x = self.cursor_save_x.max(0) as usize;
+        let y = self.cursor_save_y.max(0) as usize;
+        
+        for dy in 0..Self::CURSOR_H {
+            let py = y + dy;
+            if py >= self.height {
+                break;
+            }
+            for dx in 0..Self::CURSOR_W {
+                let px = x + dx;
+                if px >= self.width {
+                    break;
+                }
+                self.pixels[py * self.stride + px] = self.cursor_save[dy * Self::CURSOR_W + dx];
+            }
+        }
+        
+        self.cursor_save_x = -100;
+        self.cursor_save_y = -100;
     }
 }
 

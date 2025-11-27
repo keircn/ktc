@@ -552,12 +552,13 @@ fn render_frame(
     ).ok();
 
     if cursor_only && !has_pending_screencopy {
-        let (old_x, old_y) = loop_data.state.last_cursor_pos;
-        loop_data.state.canvas.restore_cursor_region(old_x, old_y);
+        loop_data.state.canvas.restore_cursor();
         if loop_data.state.cursor_visible {
             loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
         }
     } else {
+        loop_data.state.canvas.restore_cursor();
+        
         let focused_id = loop_data.state.focused_window;
         
         let windows_to_render: Vec<_> = loop_data.state.windows.iter()
@@ -603,8 +604,6 @@ fn render_frame(
             }
         }
         
-        loop_data.state.canvas.save_background();
-        
         if loop_data.state.cursor_visible {
             loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
         }
@@ -647,12 +646,13 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     }
     
     if cursor_only && !has_pending_screencopy {
-        let (old_x, old_y) = state.last_cursor_pos;
-        state.canvas.restore_cursor_region(old_x, old_y);
+        state.canvas.restore_cursor();
         if state.cursor_visible {
             state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
         }
     } else {
+        state.canvas.restore_cursor();
+        
         let focused_id = state.focused_window;
         
         let windows_to_render: Vec<_> = state.windows.iter()
@@ -697,8 +697,6 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                 }
             }
         }
-        
-        state.canvas.save_background();
         
         if state.cursor_visible {
             state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
