@@ -673,8 +673,6 @@ impl State {
     }
     
     pub fn set_focus(&mut self, window_id: WindowId) {
-        // For now, just update focus without sending configure events
-        // to test if configure events are causing the transparency issue
         self.set_focus_without_relayout(window_id);
     }
     
@@ -727,8 +725,6 @@ impl State {
                 self.keyboard_to_window.insert(kb_id, window_id);
             }
         }
-        
-        log::info!("Focus changed to window {}", window_id);
     }
     
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
@@ -795,7 +791,6 @@ impl State {
             None => return vec![],
         };
         
-        // Get the focused window's client
         let focused_client = self.windows.iter()
             .find(|w| w.id == focused_id)
             .and_then(|w| w.wl_surface.client());
@@ -805,7 +800,6 @@ impl State {
             None => return vec![],
         };
         
-        // Return keyboards that belong to the same client as the focused window
         self.keyboards.iter()
             .filter(|kb| kb.client().as_ref() == Some(&focused_client))
             .cloned()

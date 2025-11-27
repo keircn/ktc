@@ -559,32 +559,21 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         .filter_map(|w| {
             let wl_buffer = w.buffer.clone()?;
             let buffer_id = wl_buffer.id().protocol_id();
-            let buffer_data = state.buffers.get(&buffer_id);
-            if buffer_data.is_none() {
-                log::warn!("Window {} buffer {} missing buffer_data", w.id, buffer_id);
-                return None;
-            }
-            let buffer_data = buffer_data.unwrap();
+            let buffer_data = state.buffers.get(&buffer_id)?;
             let is_focused = focused_id == Some(w.id);
             Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
         })
         .collect();
     
-    // Log if we have mapped windows but couldn't build window_infos for all
-    if window_infos.len() != mapped_count {
-        log::warn!("Only {} of {} mapped windows have renderable buffers", window_infos.len(), mapped_count);
-    }
-    
-    for (window_id, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
+    for (window_id, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
         if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
-            if *buf_width == 0 || *buf_height == 0 {
-                log::warn!("Window {} has zero-size buffer: {}x{}", window_id, buf_width, buf_height);
+            if *buf_width as i32 != geometry.width || *buf_height as i32 != geometry.height {
+                log::info!("Window {} buffer {}x{} != geometry {}x{}", 
+                    window_id, buf_width, buf_height, geometry.width, geometry.height);
             }
             let pixels_copy: Vec<u32> = client_pixels.to_vec();
             state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
             buffers_to_release.push(wl_buffer.clone());
-        } else {
-            log::warn!("Window {} failed get_buffer_pixels", window_id);
         }
     }
     
