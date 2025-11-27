@@ -552,6 +552,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
 
     let focused_id = state.focused_window;
     let mut buffers_to_release = Vec::new();
+    let mapped_count = state.windows.iter().filter(|w| w.mapped).count();
     
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
@@ -569,8 +570,16 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         })
         .collect();
     
-    for (window_id, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+    // Log if we have mapped windows but couldn't build window_infos for all
+    if window_infos.len() != mapped_count {
+        log::warn!("Only {} of {} mapped windows have renderable buffers", window_infos.len(), mapped_count);
+    }
+    
+    for (window_id, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
         if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
+            if *buf_width == 0 || *buf_height == 0 {
+                log::warn!("Window {} has zero-size buffer: {}x{}", window_id, buf_width, buf_height);
+            }
             let pixels_copy: Vec<u32> = client_pixels.to_vec();
             state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
             buffers_to_release.push(wl_buffer.clone());
