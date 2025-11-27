@@ -317,6 +317,46 @@ impl Canvas {
         }
     }
 
+    pub fn blit_direct(&mut self, src: &[u32], src_width: usize, src_height: usize, src_stride: usize, dst_x: i32, dst_y: i32) {
+        if dst_x >= self.width as i32 || dst_y >= self.height as i32 {
+            return;
+        }
+        
+        let dst_x_usize = dst_x.max(0) as usize;
+        let dst_y_usize = dst_y.max(0) as usize;
+        let src_skip_x = if dst_x < 0 { (-dst_x) as usize } else { 0 };
+        let src_skip_y = if dst_y < 0 { (-dst_y) as usize } else { 0 };
+        
+        let actual_src_width = src_width.saturating_sub(src_skip_x);
+        let actual_src_height = src_height.saturating_sub(src_skip_y);
+        let copy_width = actual_src_width.min(self.width.saturating_sub(dst_x_usize));
+        let copy_height = actual_src_height.min(self.height.saturating_sub(dst_y_usize));
+        
+        if copy_width == 0 || copy_height == 0 {
+            return;
+        }
+        
+        let dst_ptr = self.pixels.as_mut_ptr();
+        let src_ptr = src.as_ptr();
+        
+        unsafe {
+            for y in 0..copy_height {
+                let src_row = src_skip_y + y;
+                let dst_row = dst_y_usize + y;
+                let src_offset = src_row * src_stride + src_skip_x;
+                let dst_offset = dst_row * self.stride + dst_x_usize;
+                
+                if src_offset + copy_width <= src.len() && dst_offset + copy_width <= self.pixels.len() {
+                    std::ptr::copy_nonoverlapping(
+                        src_ptr.add(src_offset),
+                        dst_ptr.add(dst_offset),
+                        copy_width
+                    );
+                }
+            }
+        }
+    }
+
     pub fn as_slice(&self) -> &[u32] {
         &self.pixels
     }

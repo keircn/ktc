@@ -234,9 +234,9 @@ fn run_nested() {
             }
             Event::WindowEvent { event: WindowEvent::MouseInput { state: button_state, button, .. }, .. } => {
                 let btn = match button {
-                    winit::event::MouseButton::Left => 0x110,   // BTN_LEFT
-                    winit::event::MouseButton::Right => 0x111,  // BTN_RIGHT
-                    winit::event::MouseButton::Middle => 0x112, // BTN_MIDDLE
+                    winit::event::MouseButton::Left => 0x110,
+                    winit::event::MouseButton::Right => 0x111,
+                    winit::event::MouseButton::Middle => 0x112,
                     winit::event::MouseButton::Back => 0x113,
                     winit::event::MouseButton::Forward => 0x114,
                     winit::event::MouseButton::Other(n) => 0x110 + n as u32,
