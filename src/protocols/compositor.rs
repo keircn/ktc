@@ -32,11 +32,9 @@ impl Dispatch<WlCompositor, ()> for State {
     ) {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
-                log::info!("[compositor] CreateSurface");
                 data_init.init(id, ());
             }
             wl_compositor::Request::CreateRegion { id } => {
-                log::info!("[compositor] CreateRegion");
                 data_init.init(id, ());
             }
             _ => {}
@@ -56,38 +54,31 @@ impl Dispatch<WlSurface, ()> for State {
     ) {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
-                log::info!("[surface] Attach buffer: {:?}", buffer.as_ref().map(|b| b.id()));
                 if let Some(window) = state.get_window_by_surface(resource) {
                     if buffer.is_none() {
                         window.pending_buffer = None;
                         window.mapped = false;
-                        log::info!("[surface] Buffer detached, window unmapped");
                     } else {
                         window.pending_buffer = buffer;
                     }
                 }
             }
             wl_surface::Request::Commit => {
-                log::info!("[surface] Commit");
                 if let Some(window) = state.get_window_by_surface(resource) {
                     if let Some(buffer) = window.pending_buffer.take() {
-                        log::info!("[surface] Committing buffer: {:?}", buffer.id());
                         window.buffer = Some(buffer);
                         window.mapped = true;
                     }
                 }
             }
             wl_surface::Request::Frame { callback } => {
-                log::info!("[surface] Frame callback requested");
                 let cb = data_init.init(callback, ());
                 state.frame_callbacks.push(cb);
             }
             wl_surface::Request::Destroy => {
-                log::info!("[surface] Destroy");
                 let surface_id = resource.id();
                 if let Some(pos) = state.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
                     let window_id = state.windows[pos].id;
-                    log::info!("[surface] Removing window id={}", window_id);
                     state.remove_window(window_id);
                     state.relayout_windows();
                 }

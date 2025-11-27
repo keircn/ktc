@@ -36,16 +36,12 @@ impl Dispatch<WlSeat, ()> for State {
             wl_seat::Request::GetPointer { id } => {
                 let pointer = data_init.init(id, ());
                 state.pointers.push(pointer);
-                log::info!("[seat] Pointer created, total pointers: {}", state.pointers.len());
             }
             wl_seat::Request::GetKeyboard { id } => {
                 let keyboard = data_init.init(id, ());
                 
                 if let Some(ref keymap_data) = state.keymap_data {
                     keyboard.keymap(KeymapFormat::XkbV1, keymap_data.fd.as_fd(), keymap_data.size);
-                    log::info!("[seat] Sent keymap to keyboard (size={})", keymap_data.size);
-                } else {
-                    log::warn!("[seat] No keymap available to send to keyboard");
                 }
                 
                 if keyboard.version() >= 4 {
@@ -53,7 +49,6 @@ impl Dispatch<WlSeat, ()> for State {
                 }
                 
                 state.keyboards.push(keyboard);
-                log::info!("[seat] Keyboard created, total keyboards: {}", state.keyboards.len());
             }
             wl_seat::Request::GetTouch { id } => {
                 data_init.init(id, ());

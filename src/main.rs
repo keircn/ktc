@@ -363,53 +363,30 @@ fn run_standalone() {
                         handler.process_events(|action| {
                             match action {
                                 InputAction::ExitCompositor => {
-                                    log::info!("[main] Action: ExitCompositor");
                                     session::request_shutdown();
                                 }
                                 InputAction::LaunchTerminal => {
-                                    log::info!("[main] Action: LaunchTerminal");
-                                    
                                     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                                         .unwrap_or_else(|_| "/tmp".to_string());
-                                    
-                                    log::info!("[main] Spawning foot with WAYLAND_DISPLAY={}, XDG_RUNTIME_DIR={}", 
-                                        &data.socket_name, &xdg_runtime_dir);
                                     
                                     match std::process::Command::new("foot")
                                         .env("WAYLAND_DISPLAY", &data.socket_name)
                                         .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-                                        .env("WAYLAND_DEBUG", "1")
-                                        .stderr(std::process::Stdio::piped())
+                                        .stderr(std::process::Stdio::null())
                                         .spawn() {
-                                        Ok(mut child) => {
-                                            let pid = child.id();
-                                            log::info!("[main] foot launched with PID {}", pid);
-                                            session::register_child(pid);
-                                            
-                                            if let Some(stderr) = child.stderr.take() {
-                                                std::thread::spawn(move || {
-                                                    use std::io::{BufRead, BufReader};
-                                                    let reader = BufReader::new(stderr);
-                                                    for line in reader.lines() {
-                                                        if let Ok(line) = line {
-                                                            log::info!("[foot] {}", line);
-                                                        }
-                                                    }
-                                                });
-                                            }
+                                        Ok(child) => {
+                                            session::register_child(child.id());
                                         }
                                         Err(e) => {
-                                            log::error!("[main] Failed to launch foot: {}", e);
+                                            log::error!("Failed to launch foot: {}", e);
                                         }
                                     }
                                 }
                                 InputAction::FocusNext => {
-                                    log::info!("[main] Action: FocusNext");
                                     data.state.focus_next();
                                     data.display.flush_clients().ok();
                                 }
                                 InputAction::FocusPrev => {
-                                    log::info!("[main] Action: FocusPrev");
                                     data.state.focus_prev();
                                     data.display.flush_clients().ok();
                                 }
@@ -494,7 +471,6 @@ fn render_frame(
     loop_data: &mut NestedLoopData
 ) {
     if loop_data.state.needs_relayout {
-        log::info!("[render] Processing deferred relayout");
         loop_data.state.needs_relayout = false;
         loop_data.state.relayout_windows();
         loop_data.display.flush_clients().ok();
@@ -567,7 +543,6 @@ fn render_frame(
 
 fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
     if state.needs_relayout {
-        log::info!("[render] Processing deferred relayout");
         state.needs_relayout = false;
         state.relayout_windows();
         display.flush_clients().ok();
@@ -577,6 +552,13 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
 
     let focused_id = state.focused_window;
     let mut buffers_to_release = Vec::new();
+    
+    // Check for windows that should render but can't
+    for w in &state.windows {
+        if w.mapped && w.buffer.is_none() {
+            log::warn!("Window {} is mapped but has no buffer", w.id);
+        }
+    }
     
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
