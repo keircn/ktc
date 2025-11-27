@@ -130,10 +130,6 @@ impl State {
             height: region.height,
             with_damage,
         });
-        
-        if !with_damage {
-            self.damage_tracker.mark_full_damage();
-        }
     }
 
     pub fn process_screencopy_frames(&mut self, has_damage: bool) {

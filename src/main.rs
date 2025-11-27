@@ -542,7 +542,11 @@ fn render_frame(
     let has_damage = loop_data.state.damage_tracker.has_damage();
     let cursor_only = loop_data.state.damage_tracker.is_cursor_only();
     
-    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
+    if has_pending_screencopy {
+        loop_data.state.process_screencopy_frames(has_damage);
+    }
+    
+    if !has_damage && !has_frame_callbacks {
         return;
     }
     
@@ -551,7 +555,7 @@ fn render_frame(
         std::num::NonZeroU32::new(height as u32).unwrap(),
     ).ok();
 
-    if cursor_only && !has_pending_screencopy {
+    if cursor_only {
         loop_data.state.canvas.restore_cursor();
         if loop_data.state.cursor_visible {
             loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
@@ -609,8 +613,6 @@ fn render_frame(
         }
     }
     
-    loop_data.state.process_screencopy_frames(has_damage);
-    
     loop_data.state.damage_tracker.clear();
     
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
@@ -641,11 +643,15 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     let has_damage = state.damage_tracker.has_damage();
     let cursor_only = state.damage_tracker.is_cursor_only();
     
-    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
+    if has_pending_screencopy {
+        state.process_screencopy_frames(has_damage);
+    }
+    
+    if !has_damage && !has_frame_callbacks {
         return;
     }
     
-    if cursor_only && !has_pending_screencopy {
+    if cursor_only {
         state.canvas.restore_cursor();
         if state.cursor_visible {
             state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
@@ -702,8 +708,6 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
         }
     }
-    
-    state.process_screencopy_frames(has_damage);
     
     state.damage_tracker.clear();
     
