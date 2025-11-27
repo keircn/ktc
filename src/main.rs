@@ -553,47 +553,83 @@ fn render_frame(
     let focused_id = loop_data.state.focused_window;
     let needs_full_redraw = loop_data.state.damage_tracker.is_full_damage();
     
-    let window_infos: Vec<_> = loop_data.state.windows.iter()
-        .filter(|w| w.mapped)
-        .filter_map(|w| {
-            let wl_buffer = w.buffer.clone()?;
+    let window_meta: Vec<_> = loop_data.state.windows.iter()
+        .filter(|w| w.mapped && w.buffer.is_some())
+        .map(|w| {
+            let wl_buffer = w.buffer.as_ref().unwrap();
             let buffer_id = wl_buffer.id().protocol_id();
-            let buffer_data = loop_data.state.buffers.get(&buffer_id)?;
-            let is_focused = focused_id == Some(w.id);
-            let needs_redraw = w.needs_redraw || needs_full_redraw;
-            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused, needs_redraw))
+            (w.id, w.geometry, buffer_id, w.needs_redraw || needs_full_redraw, focused_id == Some(w.id))
         })
         .collect();
-
-    let mut buffers_to_release = Vec::new();
-    let mut any_window_redrawn = false;
-
-    if needs_full_redraw || window_infos.iter().any(|(_, _, _, _, _, _, needs)| *needs) {
-        if needs_full_redraw {
-            loop_data.state.canvas.clear_with_pattern();
+    
+    struct WindowRenderData {
+        id: state::WindowId,
+        geometry: state::Rectangle,
+        buf_width: usize,
+        buf_height: usize,
+        stride: usize,
+        is_focused: bool,
+        pixels: Vec<u32>,
+    }
+    
+    let mut render_data: Vec<WindowRenderData> = Vec::new();
+    
+    for (id, geometry, buffer_id, needs_redraw, is_focused) in window_meta {
+        if !needs_redraw {
+            continue;
         }
+        let buffer_data = match loop_data.state.buffers.get(&buffer_id) {
+            Some(d) => d.clone(),
+            None => continue,
+        };
         
-        for (id, geometry, wl_buffer, buf_width, buf_height, is_focused, needs_redraw) in &window_infos {
-            if *needs_redraw || needs_full_redraw {
-                if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(wl_buffer) {
-                    loop_data.state.canvas.draw_decorations(
-                        geometry.x, geometry.y, 
-                        *buf_width as i32, *buf_height as i32,
-                        TITLE_BAR_HEIGHT, *is_focused
-                    );
-                    
-                    let content_y = geometry.y + TITLE_BAR_HEIGHT;
-                    loop_data.state.canvas.blit_direct(pixels, *buf_width, *buf_height, stride, geometry.x, content_y);
-                    buffers_to_release.push(wl_buffer.clone());
-                    any_window_redrawn = true;
-                    
-                    if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == *id) {
-                        win.needs_redraw = false;
-                    }
-                }
+        let wl_buffer = loop_data.state.windows.iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.buffer.clone());
+        
+        if let Some(ref buf) = wl_buffer {
+            if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(buf) {
+                render_data.push(WindowRenderData {
+                    id,
+                    geometry,
+                    buf_width: buffer_data.width as usize,
+                    buf_height: buffer_data.height as usize,
+                    stride,
+                    is_focused,
+                    pixels: pixels.to_vec(),
+                });
             }
         }
-    } else if loop_data.state.windows.is_empty() && needs_full_redraw {
+    }
+
+    let mut any_window_redrawn = false;
+
+    if needs_full_redraw {
+        loop_data.state.canvas.clear_with_pattern();
+    }
+    
+    for data in &render_data {
+        loop_data.state.canvas.draw_decorations(
+            data.geometry.x, data.geometry.y, 
+            data.buf_width as i32, data.buf_height as i32,
+            TITLE_BAR_HEIGHT, data.is_focused
+        );
+        
+        let content_y = data.geometry.y + TITLE_BAR_HEIGHT;
+        loop_data.state.canvas.blit_fast(&data.pixels, data.buf_width, data.buf_height, data.stride, data.geometry.x, content_y);
+        any_window_redrawn = true;
+    }
+    
+    for data in &render_data {
+        if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == data.id) {
+            win.needs_redraw = false;
+            if let Some(ref buffer) = win.buffer {
+                buffer.release();
+            }
+        }
+    }
+    
+    if loop_data.state.windows.is_empty() && needs_full_redraw {
         loop_data.state.canvas.clear_with_pattern();
         any_window_redrawn = true;
     }
@@ -610,10 +646,6 @@ fn render_frame(
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
     buffer.copy_from_slice(loop_data.state.canvas.as_slice());
     buffer.present().ok();
-    
-    for wl_buffer in buffers_to_release {
-        wl_buffer.release();
-    }
     
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -645,47 +677,83 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     let focused_id = state.focused_window;
     let needs_full_redraw = state.damage_tracker.is_full_damage();
     
-    let window_infos: Vec<_> = state.windows.iter()
-        .filter(|w| w.mapped)
-        .filter_map(|w| {
-            let wl_buffer = w.buffer.clone()?;
+    let window_meta: Vec<_> = state.windows.iter()
+        .filter(|w| w.mapped && w.buffer.is_some())
+        .map(|w| {
+            let wl_buffer = w.buffer.as_ref().unwrap();
             let buffer_id = wl_buffer.id().protocol_id();
-            let buffer_data = state.buffers.get(&buffer_id)?;
-            let is_focused = focused_id == Some(w.id);
-            let needs_redraw = w.needs_redraw || needs_full_redraw;
-            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused, needs_redraw))
+            (w.id, w.geometry, buffer_id, w.needs_redraw || needs_full_redraw, focused_id == Some(w.id))
         })
         .collect();
     
-    let mut buffers_to_release = Vec::new();
-    let mut any_window_redrawn = false;
-
-    if needs_full_redraw || window_infos.iter().any(|(_, _, _, _, _, _, needs)| *needs) {
-        if needs_full_redraw {
-            state.canvas.clear_with_pattern();
+    struct WindowRenderData {
+        id: state::WindowId,
+        geometry: state::Rectangle,
+        buf_width: usize,
+        buf_height: usize,
+        stride: usize,
+        is_focused: bool,
+        pixels: Vec<u32>,
+    }
+    
+    let mut render_data: Vec<WindowRenderData> = Vec::new();
+    
+    for (id, geometry, buffer_id, needs_redraw, is_focused) in window_meta {
+        if !needs_redraw {
+            continue;
         }
+        let buffer_data = match state.buffers.get(&buffer_id) {
+            Some(d) => d.clone(),
+            None => continue,
+        };
         
-        for (id, geometry, wl_buffer, buf_width, buf_height, is_focused, needs_redraw) in &window_infos {
-            if *needs_redraw || needs_full_redraw {
-                if let Some((client_pixels, stride)) = state.get_buffer_pixels(wl_buffer) {
-                    state.canvas.draw_decorations(
-                        geometry.x, geometry.y,
-                        *buf_width as i32, *buf_height as i32,
-                        TITLE_BAR_HEIGHT, *is_focused
-                    );
-                    
-                    let content_y = geometry.y + TITLE_BAR_HEIGHT;
-                    state.canvas.blit_direct(client_pixels, *buf_width, *buf_height, stride, geometry.x, content_y);
-                    buffers_to_release.push(wl_buffer.clone());
-                    any_window_redrawn = true;
-                    
-                    if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
-                        win.needs_redraw = false;
-                    }
-                }
+        let wl_buffer = state.windows.iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.buffer.clone());
+        
+        if let Some(ref buf) = wl_buffer {
+            if let Some((pixels, stride)) = state.get_buffer_pixels(buf) {
+                render_data.push(WindowRenderData {
+                    id,
+                    geometry,
+                    buf_width: buffer_data.width as usize,
+                    buf_height: buffer_data.height as usize,
+                    stride,
+                    is_focused,
+                    pixels: pixels.to_vec(),
+                });
             }
         }
-    } else if state.windows.is_empty() && needs_full_redraw {
+    }
+    
+    let mut any_window_redrawn = false;
+
+    if needs_full_redraw {
+        state.canvas.clear_with_pattern();
+    }
+    
+    for data in &render_data {
+        state.canvas.draw_decorations(
+            data.geometry.x, data.geometry.y,
+            data.buf_width as i32, data.buf_height as i32,
+            TITLE_BAR_HEIGHT, data.is_focused
+        );
+        
+        let content_y = data.geometry.y + TITLE_BAR_HEIGHT;
+        state.canvas.blit_fast(&data.pixels, data.buf_width, data.buf_height, data.stride, data.geometry.x, content_y);
+        any_window_redrawn = true;
+    }
+    
+    for data in &render_data {
+        if let Some(win) = state.windows.iter_mut().find(|w| w.id == data.id) {
+            win.needs_redraw = false;
+            if let Some(ref buffer) = win.buffer {
+                buffer.release();
+            }
+        }
+    }
+    
+    if state.windows.is_empty() && needs_full_redraw {
         state.canvas.clear_with_pattern();
         any_window_redrawn = true;
     }
@@ -720,10 +788,6 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                 }
             }
         }
-    }
-    
-    for wl_buffer in buffers_to_release {
-        wl_buffer.release();
     }
     
     let time = std::time::SystemTime::now()
