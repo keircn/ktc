@@ -529,9 +529,20 @@ fn render_frame(
         (size.width as usize, size.height as usize)
     };
     
-    loop_data.state.canvas.resize(width, height);
+    if loop_data.state.canvas.width != width || loop_data.state.canvas.height != height {
+        loop_data.state.canvas.resize(width, height);
+        loop_data.state.damage_tracker.mark_full_damage();
+    }
     if loop_data.state.screen_size() != (width as i32, height as i32) {
         loop_data.state.set_screen_size(width as i32, height as i32);
+    }
+    
+    let has_pending_screencopy = !loop_data.state.screencopy_frames.is_empty();
+    let has_frame_callbacks = !loop_data.state.frame_callbacks.is_empty();
+    let has_damage = loop_data.state.damage_tracker.has_damage();
+    
+    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
+        return;
     }
     
     surface.resize(
@@ -540,7 +551,7 @@ fn render_frame(
     ).ok();
 
     let focused_id = loop_data.state.focused_window;
-    let mut has_damage = false;
+    let needs_full_redraw = loop_data.state.damage_tracker.is_full_damage();
     
     let window_infos: Vec<_> = loop_data.state.windows.iter()
         .filter(|w| w.mapped)
@@ -549,43 +560,52 @@ fn render_frame(
             let buffer_id = wl_buffer.id().protocol_id();
             let buffer_data = loop_data.state.buffers.get(&buffer_id)?;
             let is_focused = focused_id == Some(w.id);
-            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
+            let needs_redraw = w.needs_redraw || needs_full_redraw;
+            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused, needs_redraw))
         })
         .collect();
 
     let mut buffers_to_release = Vec::new();
+    let mut any_window_redrawn = false;
 
-    if !window_infos.is_empty() {
-        loop_data.state.canvas.clear_with_pattern();
+    if needs_full_redraw || window_infos.iter().any(|(_, _, _, _, _, _, needs)| *needs) {
+        if needs_full_redraw {
+            loop_data.state.canvas.clear_with_pattern();
+        }
         
-        for (_, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
-            if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(wl_buffer) {
-                let pixels_copy: Vec<u32> = pixels.to_vec();
-                
-                // Draw decorations first
-                loop_data.state.canvas.draw_decorations(
-                    geometry.x, geometry.y, 
-                    *buf_width as i32, *buf_height as i32,
-                    TITLE_BAR_HEIGHT, *is_focused
-                );
-                
-                // Blit content below title bar
-                let content_y = geometry.y + TITLE_BAR_HEIGHT;
-                loop_data.state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, content_y);
-                buffers_to_release.push(wl_buffer.clone());
-                has_damage = true;
+        for (id, geometry, wl_buffer, buf_width, buf_height, is_focused, needs_redraw) in &window_infos {
+            if *needs_redraw || needs_full_redraw {
+                if let Some((pixels, stride)) = loop_data.state.get_buffer_pixels(wl_buffer) {
+                    loop_data.state.canvas.draw_decorations(
+                        geometry.x, geometry.y, 
+                        *buf_width as i32, *buf_height as i32,
+                        TITLE_BAR_HEIGHT, *is_focused
+                    );
+                    
+                    let content_y = geometry.y + TITLE_BAR_HEIGHT;
+                    loop_data.state.canvas.blit_direct(pixels, *buf_width, *buf_height, stride, geometry.x, content_y);
+                    buffers_to_release.push(wl_buffer.clone());
+                    any_window_redrawn = true;
+                    
+                    if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == *id) {
+                        win.needs_redraw = false;
+                    }
+                }
             }
         }
-    } else if loop_data.state.windows.is_empty() {
+    } else if loop_data.state.windows.is_empty() && needs_full_redraw {
         loop_data.state.canvas.clear_with_pattern();
+        any_window_redrawn = true;
     }
     
-    // Draw cursor
     if loop_data.state.cursor_visible {
         loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
     }
     
-    loop_data.state.process_screencopy_frames(has_damage);
+    let screencopy_damage = any_window_redrawn || has_damage;
+    loop_data.state.process_screencopy_frames(screencopy_damage);
+    
+    loop_data.state.damage_tracker.clear();
     
     let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
     buffer.copy_from_slice(loop_data.state.canvas.as_slice());
@@ -614,8 +634,16 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         display.flush_clients().ok();
     }
     
+    let has_pending_screencopy = !state.screencopy_frames.is_empty();
+    let has_frame_callbacks = !state.frame_callbacks.is_empty();
+    let has_damage = state.damage_tracker.has_damage();
+    
+    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
+        return;
+    }
+    
     let focused_id = state.focused_window;
-    let mut has_damage = false;
+    let needs_full_redraw = state.damage_tracker.is_full_damage();
     
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
@@ -624,43 +652,52 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             let buffer_id = wl_buffer.id().protocol_id();
             let buffer_data = state.buffers.get(&buffer_id)?;
             let is_focused = focused_id == Some(w.id);
-            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
+            let needs_redraw = w.needs_redraw || needs_full_redraw;
+            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused, needs_redraw))
         })
         .collect();
     
     let mut buffers_to_release = Vec::new();
+    let mut any_window_redrawn = false;
 
-    if !window_infos.is_empty() {
-        state.canvas.clear_with_pattern();
+    if needs_full_redraw || window_infos.iter().any(|(_, _, _, _, _, _, needs)| *needs) {
+        if needs_full_redraw {
+            state.canvas.clear_with_pattern();
+        }
         
-        for (_, geometry, wl_buffer, buf_width, buf_height, is_focused) in &window_infos {
-            if let Some((client_pixels, stride)) = state.get_buffer_pixels(&wl_buffer) {
-                let pixels_copy: Vec<u32> = client_pixels.to_vec();
-                
-                // Draw decorations first
-                state.canvas.draw_decorations(
-                    geometry.x, geometry.y,
-                    *buf_width as i32, *buf_height as i32,
-                    TITLE_BAR_HEIGHT, *is_focused
-                );
-                
-                // Blit content below title bar
-                let content_y = geometry.y + TITLE_BAR_HEIGHT;
-                state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, stride, geometry.x, content_y);
-                buffers_to_release.push(wl_buffer.clone());
-                has_damage = true;
+        for (id, geometry, wl_buffer, buf_width, buf_height, is_focused, needs_redraw) in &window_infos {
+            if *needs_redraw || needs_full_redraw {
+                if let Some((client_pixels, stride)) = state.get_buffer_pixels(wl_buffer) {
+                    state.canvas.draw_decorations(
+                        geometry.x, geometry.y,
+                        *buf_width as i32, *buf_height as i32,
+                        TITLE_BAR_HEIGHT, *is_focused
+                    );
+                    
+                    let content_y = geometry.y + TITLE_BAR_HEIGHT;
+                    state.canvas.blit_direct(client_pixels, *buf_width, *buf_height, stride, geometry.x, content_y);
+                    buffers_to_release.push(wl_buffer.clone());
+                    any_window_redrawn = true;
+                    
+                    if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
+                        win.needs_redraw = false;
+                    }
+                }
             }
         }
-    } else if state.windows.is_empty() {
+    } else if state.windows.is_empty() && needs_full_redraw {
         state.canvas.clear_with_pattern();
+        any_window_redrawn = true;
     }
     
-    // Draw cursor
     if state.cursor_visible {
         state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
     }
     
-    state.process_screencopy_frames(has_damage);
+    let screencopy_damage = any_window_redrawn || has_damage;
+    state.process_screencopy_frames(screencopy_damage);
+    
+    state.damage_tracker.clear();
     
     if let Some(drm) = drm_info {
         unsafe {
