@@ -1,11 +1,12 @@
-use wayland_server::{GlobalDispatch, Dispatch};
+use wayland_server::{GlobalDispatch, Dispatch, Resource};
 use wayland_server::protocol::{
     wl_seat::{self, WlSeat},
     wl_pointer::{self, WlPointer},
-    wl_keyboard::{self, WlKeyboard},
+    wl_keyboard::{self, WlKeyboard, KeymapFormat},
     wl_touch::{self, WlTouch},
 };
 use crate::state::State;
+use std::os::fd::AsFd;
 
 impl GlobalDispatch<WlSeat, ()> for State {
     fn bind(
@@ -39,6 +40,20 @@ impl Dispatch<WlSeat, ()> for State {
             }
             wl_seat::Request::GetKeyboard { id } => {
                 let keyboard = data_init.init(id, ());
+                
+                // Send keymap to client
+                if let Some(ref keymap_data) = state.keymap_data {
+                    keyboard.keymap(KeymapFormat::XkbV1, keymap_data.fd.as_fd(), keymap_data.size);
+                    log::info!("[seat] Sent keymap to keyboard (size={})", keymap_data.size);
+                } else {
+                    log::warn!("[seat] No keymap available to send to keyboard");
+                }
+                
+                // Send repeat info if supported
+                if keyboard.version() >= 4 {
+                    keyboard.repeat_info(25, 600); // 25 keys/sec, 600ms delay
+                }
+                
                 state.keyboards.push(keyboard);
                 log::info!("[seat] Keyboard created, total keyboards: {}", state.keyboards.len());
             }

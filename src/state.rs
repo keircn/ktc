@@ -270,6 +270,8 @@ pub struct State {
     pub keyboard_serial: u32,
     pub pointer_serial: u32,
     
+    pub keymap_data: Option<KeymapData>,
+    
     pub pending_xdg_surfaces: HashMap<u32, (XdgSurface, WlSurface)>,
 }
 
@@ -300,10 +302,17 @@ pub struct BufferData {
     pub format: u32,
 }
 
+pub struct KeymapData {
+    pub fd: OwnedFd,
+    pub size: u32,
+}
+
 impl State {
     pub fn new() -> Self {
         let default_width = 1920;
         let default_height = 1080;
+        
+        let keymap_data = Self::create_keymap();
         
         Self {
             windows: Vec::new(),
@@ -320,8 +329,53 @@ impl State {
             pointers: Vec::new(),
             keyboard_serial: 0,
             pointer_serial: 0,
+            keymap_data,
             pending_xdg_surfaces: HashMap::new(),
         }
+    }
+    
+    fn create_keymap() -> Option<KeymapData> {
+        use std::io::Write;
+        use std::os::fd::FromRawFd;
+        
+        let xkb_context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkbcommon::xkb::Keymap::new_from_names(
+            &xkb_context,
+            "",
+            "",
+            "",
+            "",
+            None,
+            xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )?;
+        
+        let keymap_string = keymap.get_as_string(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1);
+        let keymap_bytes = keymap_string.as_bytes();
+        let size = keymap_bytes.len() + 1; // +1 for null terminator
+        
+        let name = std::ffi::CString::new("ktc-keymap").ok()?;
+        let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+        if fd < 0 {
+            log::error!("Failed to create memfd for keymap");
+            return None;
+        }
+        
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        if file.write_all(keymap_bytes).is_err() {
+            log::error!("Failed to write keymap to memfd");
+            return None;
+        }
+        if file.write_all(&[0]).is_err() { // null terminator
+            log::error!("Failed to write null terminator to keymap");
+            return None;
+        }
+        
+        log::info!("Created keymap (size={})", size);
+        
+        Some(KeymapData {
+            fd: file.into(),
+            size: size as u32,
+        })
     }
     
     pub fn add_output(&mut self, name: String, width: i32, height: i32) -> OutputId {

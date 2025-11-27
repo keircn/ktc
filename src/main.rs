@@ -391,7 +391,7 @@ fn run_standalone() {
                                     data.state.focus_prev();
                                     data.display.flush_clients().ok();
                                 }
-                                InputAction::KeyEvent { keycode, state: key_state } => {
+                                InputAction::KeyEvent { keycode, state: key_state, mods_depressed, mods_latched, mods_locked, group } => {
                                     let focused_keyboards = data.state.get_focused_keyboards();
                                     
                                     if !focused_keyboards.is_empty() {
@@ -403,6 +403,7 @@ fn run_standalone() {
                                         let serial = data.state.next_keyboard_serial();
                                         for keyboard in focused_keyboards {
                                             keyboard.key(serial, 0, keycode, wl_state);
+                                            keyboard.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
                                         }
                                         data.display.flush_clients().ok();
                                     }

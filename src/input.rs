@@ -188,8 +188,12 @@ impl InputHandler {
             }
             
             callback(InputAction::KeyEvent { 
-                keycode: keycode - 8, 
-                state 
+                keycode: keycode - 8,
+                state,
+                mods_depressed: xkb_state.serialize_mods(xkb::STATE_MODS_DEPRESSED),
+                mods_latched: xkb_state.serialize_mods(xkb::STATE_MODS_LATCHED),
+                mods_locked: xkb_state.serialize_mods(xkb::STATE_MODS_LOCKED),
+                group: xkb_state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
             });
         } else {
             log::error!("XKB state still not available after initialization");
@@ -206,5 +210,12 @@ pub enum InputAction {
     LaunchTerminal,
     FocusNext,
     FocusPrev,
-    KeyEvent { keycode: u32, state: KeyState },
+    KeyEvent { 
+        keycode: u32, 
+        state: KeyState,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    },
 }
