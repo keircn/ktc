@@ -109,7 +109,9 @@ fn print_help() {
     println!();
     println!("KEYBINDS:");
     println!("    Ctrl+Alt+Q           Exit compositor");
-    println!("    Alt+T                Launch terminal (ghostty)");
+    println!("    Alt+T                Launch terminal (foot)");
+    println!("    Alt+Tab / Alt+J      Focus next window");
+    println!("    Alt+K                Focus previous window");
 }
 
 fn setup_wayland() -> (Display<State>, ListeningSocket) {
@@ -363,23 +365,23 @@ fn run_standalone() {
                                     session::request_shutdown();
                                 }
                                 InputAction::LaunchTerminal => {
-                                    log::info!("Alt+T pressed - launching ghostty terminal");
+                                    log::info!("Alt+T pressed - launching foot terminal");
                                     
                                     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                                         .unwrap_or_else(|_| "/tmp".to_string());
                                     
-                                    match std::process::Command::new("ghostty")
+                                    match std::process::Command::new("foot")
                                         .env("WAYLAND_DISPLAY", &data.socket_name)
                                         .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
                                         .spawn() {
                                         Ok(child) => {
                                             let pid = child.id();
-                                            log::info!("ghostty launched with PID {} on {}", pid, data.socket_name);
+                                            log::info!("foot launched with PID {} on {}", pid, data.socket_name);
                                             session::register_child(pid);
                                         }
                                         Err(e) => {
-                                            log::error!("Failed to launch ghostty: {}", e);
-                                            log::info!("Make sure ghostty is installed and in PATH");
+                                            log::error!("Failed to launch foot: {}", e);
+                                            log::info!("Make sure foot is installed: sudo apt install foot");
                                         }
                                     }
                                 }
