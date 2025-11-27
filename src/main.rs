@@ -553,33 +553,33 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     let focused_id = state.focused_window;
     let mut buffers_to_release = Vec::new();
     
-    // Check for windows that should render but can't
-    for w in &state.windows {
-        if w.mapped && w.buffer.is_none() {
-            log::warn!("Window {} is mapped but has no buffer", w.id);
-        }
-    }
-    
     let window_infos: Vec<_> = state.windows.iter()
         .filter(|w| w.mapped)
         .filter_map(|w| {
             let wl_buffer = w.buffer.clone()?;
             let buffer_id = wl_buffer.id().protocol_id();
-            let buffer_data = state.buffers.get(&buffer_id)?;
+            let buffer_data = state.buffers.get(&buffer_id);
+            if buffer_data.is_none() {
+                log::warn!("Window {} buffer {} missing buffer_data", w.id, buffer_id);
+                return None;
+            }
+            let buffer_data = buffer_data.unwrap();
             let is_focused = focused_id == Some(w.id);
-            Some((w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
+            Some((w.id, w.geometry, wl_buffer, buffer_data.width as usize, buffer_data.height as usize, is_focused))
         })
         .collect();
     
-    for (geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
+    for (window_id, geometry, wl_buffer, buf_width, buf_height, _) in &window_infos {
         if let Some(client_pixels) = state.get_buffer_pixels(&wl_buffer) {
             let pixels_copy: Vec<u32> = client_pixels.to_vec();
             state.canvas.blit_fast(&pixels_copy, *buf_width, *buf_height, geometry.x, geometry.y);
             buffers_to_release.push(wl_buffer.clone());
+        } else {
+            log::warn!("Window {} failed get_buffer_pixels", window_id);
         }
     }
     
-    for (geometry, _, _, _, is_focused) in &window_infos {
+    for (_, geometry, _, _, _, is_focused) in &window_infos {
         let border_color = if *is_focused { 0xFF4A9EFF } else { 0xFF404040 };
         let thickness = if *is_focused { 3 } else { 1 };
         state.canvas.draw_border(geometry.x, geometry.y, geometry.width, geometry.height, border_color, thickness);
