@@ -643,13 +643,15 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     let has_pending_screencopy = !state.screencopy_frames.is_empty();
     let has_frame_callbacks = !state.frame_callbacks.is_empty();
     let has_damage = state.damage_tracker.has_damage();
-    let cursor_only = state.damage_tracker.is_cursor_only();
+    let cursor_only = state.damage_tracker.is_cursor_only() && !has_pending_screencopy;
     
     if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
         return;
     }
     
-    if has_damage {
+    let needs_render = has_damage || has_pending_screencopy;
+    
+    if needs_render {
         if cursor_only {
             state.canvas.restore_cursor();
             if state.cursor_visible {
@@ -708,16 +710,16 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             }
         }
         
-        state.damage_tracker.clear();
+        if has_damage {
+            state.damage_tracker.clear();
+        }
     }
     
-    // Process screencopy - always provide frames when requested (canvas is always valid)
     if has_pending_screencopy {
-        state.process_screencopy_frames(has_damage);
+        state.process_screencopy_frames(true);
     }
     
-    // Only copy to DRM framebuffer when there's actual damage
-    if has_damage {
+    if needs_render {
         if let Some(drm) = drm_info {
             unsafe {
                 let fb_pixels = std::slice::from_raw_parts_mut(drm.fb_ptr, drm.width * drm.height);
@@ -742,7 +744,6 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
         }
     }
     
-    // Only process frame callbacks when there's damage or callbacks waiting
     if has_damage || has_frame_callbacks {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
