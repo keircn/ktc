@@ -686,6 +686,21 @@ impl GpuRenderer {
         }
         false
     }
+    
+    pub fn drm_dev(&self) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::fd::AsRawFd;
+        
+        let fd = self.drm_card.as_fd().as_raw_fd();
+        unsafe {
+            let mut stat: libc::stat = std::mem::zeroed();
+            if libc::fstat(fd, &mut stat) == 0 {
+                stat.st_rdev
+            } else {
+                0
+            }
+        }
+    }
 }
 
 impl Drop for GpuRenderer {

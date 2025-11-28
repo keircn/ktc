@@ -1,14 +1,26 @@
 use std::sync::Mutex;
-use std::os::fd::OwnedFd;
+use std::os::fd::{OwnedFd, AsRawFd, FromRawFd};
 use wayland_server::{Dispatch, GlobalDispatch, Resource};
 use wayland_protocols::wp::linux_dmabuf::zv1::server::{
     zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+    zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
 };
 use wayland_server::protocol::wl_buffer::WlBuffer;
 use crate::state::State;
 
 pub struct DmaBufGlobal;
+
+pub struct DmaBufFeedbackData {
+    pub for_surface: bool,
+}
+
+#[repr(C, packed)]
+struct FormatModifierEntry {
+    format: u32,
+    _padding: u32,
+    modifier: u64,
+}
 
 pub struct DmaBufParamsData {
     inner: Mutex<DmaBufParamsInner>,
@@ -67,6 +79,10 @@ impl GlobalDispatch<ZwpLinuxDmabufV1, DmaBufGlobal> for State {
     ) {
         let dmabuf = data_init.init(resource, ());
         
+        if dmabuf.version() >= 4 {
+            return;
+        }
+        
         if let Some(ref renderer) = state.gpu_renderer {
             for fmt in &renderer.supported_formats {
                 if dmabuf.version() >= 3 {
@@ -88,7 +104,7 @@ impl GlobalDispatch<ZwpLinuxDmabufV1, DmaBufGlobal> for State {
 
 impl Dispatch<ZwpLinuxDmabufV1, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &ZwpLinuxDmabufV1,
         request: zwp_linux_dmabuf_v1::Request,
@@ -101,14 +117,127 @@ impl Dispatch<ZwpLinuxDmabufV1, ()> for State {
                 data_init.init(params_id, DmaBufParamsData::default());
             }
             zwp_linux_dmabuf_v1::Request::Destroy => {}
-            zwp_linux_dmabuf_v1::Request::GetDefaultFeedback { .. } => {
-                log::warn!("[dmabuf] get_default_feedback not implemented");
+            zwp_linux_dmabuf_v1::Request::GetDefaultFeedback { id } => {
+                let feedback = data_init.init(id, DmaBufFeedbackData { for_surface: false });
+                send_feedback_events(state, &feedback);
             }
-            zwp_linux_dmabuf_v1::Request::GetSurfaceFeedback { .. } => {
-                log::warn!("[dmabuf] get_surface_feedback not implemented");
+            zwp_linux_dmabuf_v1::Request::GetSurfaceFeedback { id, .. } => {
+                let feedback = data_init.init(id, DmaBufFeedbackData { for_surface: true });
+                send_feedback_events(state, &feedback);
             }
             _ => {}
         }
+    }
+}
+
+fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
+    let formats = if let Some(ref renderer) = state.gpu_renderer {
+        renderer.supported_formats.clone()
+    } else {
+        vec![
+            crate::renderer::DmaBufFormat {
+                format: drm_fourcc::DrmFourcc::Argb8888 as u32,
+                modifier: drm_fourcc::DrmModifier::Linear.into(),
+            },
+            crate::renderer::DmaBufFormat {
+                format: drm_fourcc::DrmFourcc::Xrgb8888 as u32,
+                modifier: drm_fourcc::DrmModifier::Linear.into(),
+            },
+        ]
+    };
+    
+    let table_size = formats.len() * std::mem::size_of::<FormatModifierEntry>();
+    
+    let fd = match create_format_table_fd(&formats) {
+        Ok(fd) => fd,
+        Err(e) => {
+            log::error!("[dmabuf] Failed to create format table: {}", e);
+            feedback.done();
+            return;
+        }
+    };
+    
+    feedback.format_table(fd.as_raw_fd(), table_size as u32);
+    
+    let dev = if let Some(ref renderer) = state.gpu_renderer {
+        renderer.drm_dev()
+    } else {
+        match std::fs::metadata("/dev/dri/card0") {
+            Ok(meta) => {
+                use std::os::unix::fs::MetadataExt;
+                meta.rdev()
+            }
+            Err(_) => 0,
+        }
+    };
+    
+    let dev_bytes = dev.to_ne_bytes();
+    feedback.main_device(dev_bytes.to_vec());
+    
+    feedback.tranche_target_device(dev_bytes.to_vec());
+    feedback.tranche_flags(zwp_linux_dmabuf_feedback_v1::TrancheFlags::Scanout);
+    
+    let indices: Vec<u8> = (0..formats.len() as u16)
+        .flat_map(|i| i.to_ne_bytes())
+        .collect();
+    feedback.tranche_formats(indices);
+    
+    feedback.tranche_done();
+    feedback.done();
+}
+
+fn create_format_table_fd(formats: &[crate::renderer::DmaBufFormat]) -> Result<OwnedFd, std::io::Error> {
+    use std::io::Write;
+    
+    let fd = unsafe {
+        let fd = libc::memfd_create(
+            b"dmabuf-format-table\0".as_ptr() as *const libc::c_char,
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        );
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        OwnedFd::from_raw_fd(fd)
+    };
+    
+    let mut file = std::fs::File::from(fd.try_clone()?);
+    for fmt in formats {
+        let entry = FormatModifierEntry {
+            format: fmt.format,
+            _padding: 0,
+            modifier: fmt.modifier,
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                &entry as *const FormatModifierEntry as *const u8,
+                std::mem::size_of::<FormatModifierEntry>(),
+            )
+        };
+        file.write_all(bytes)?;
+    }
+    
+    unsafe {
+        libc::fcntl(
+            fd.as_raw_fd(),
+            libc::F_ADD_SEALS,
+            libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE,
+        );
+    }
+    
+    Ok(fd)
+}
+
+impl Dispatch<ZwpLinuxDmabufFeedbackV1, DmaBufFeedbackData> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &ZwpLinuxDmabufFeedbackV1,
+        request: zwp_linux_dmabuf_feedback_v1::Request,
+        _data: &DmaBufFeedbackData,
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        if let zwp_linux_dmabuf_feedback_v1::Request::Destroy = request {}
     }
 }
 
