@@ -955,6 +955,7 @@ impl State {
         
         for (i, window) in self.windows.iter_mut().enumerate() {
             let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
+            log::debug!("[relayout] Window {} (idx {}) geometry: {:?}", window.id, i, new_geometry);
             if window.geometry != new_geometry {
                 window.geometry = new_geometry;
                 window.needs_redraw = true;

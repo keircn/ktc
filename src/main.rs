@@ -706,13 +706,12 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                 .collect();
             
             if windows_to_render.len() != total_windows && total_windows > 0 {
+                log::warn!("[render] Only rendering {} of {} windows", windows_to_render.len(), total_windows);
                 for w in &state.windows {
-                    if !w.mapped || w.buffer.is_none() {
-                        log::warn!(
-                            "[render] Window {} not rendered: mapped={} has_buffer={} cache={}x{}",
-                            w.id, w.mapped, w.buffer.is_some(), w.cache_width, w.cache_height
-                        );
-                    }
+                    log::warn!(
+                        "[render] Window {} status: mapped={} has_buffer={} cache={}x{} geom={:?}",
+                        w.id, w.mapped, w.buffer.is_some(), w.cache_width, w.cache_height, w.geometry
+                    );
                 }
             }
             
