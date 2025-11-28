@@ -365,7 +365,25 @@ impl GpuRenderer {
     }
     
     pub fn end_frame(&mut self) {
-        unsafe { self.gl.finish(); }
+        // Wait for previous flip to complete before swapping new buffer
+        if self.flip_pending {
+            self.wait_for_flip();
+            self.flip_pending = false;
+            
+            // Release previous buffer after flip completes
+            unsafe {
+                let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
+                if let Some(old_fb) = self.current_fb.take() {
+                    self.drm_card.destroy_framebuffer(old_fb).ok();
+                }
+                if !self.current_bo.is_null() {
+                    gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
+                }
+                self.current_fb = self.next_fb.take();
+                self.current_bo = self.next_bo;
+                self.next_bo = std::ptr::null_mut();
+            }
+        }
         
         self.egl.swap_buffers(self.display, self.surface).ok();
         
@@ -441,17 +459,9 @@ impl GpuRenderer {
                     None,
                 ) {
                     Ok(()) => {
-                        self.wait_for_flip();
-                        
-                        if let Some(old_fb) = self.current_fb.take() {
-                            self.drm_card.destroy_framebuffer(old_fb).ok();
-                        }
-                        if !self.current_bo.is_null() {
-                            gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
-                        }
-                        
-                        self.current_fb = Some(fb);
-                        self.current_bo = bo;
+                        self.next_fb = Some(fb);
+                        self.next_bo = bo;
+                        self.flip_pending = true;
                     }
                     Err(e) => {
                         log::warn!("[gpu] page_flip failed: {}, falling back to set_crtc", e);
@@ -493,7 +503,7 @@ impl GpuRenderer {
             revents: 0,
         }];
         
-        let timeout_ms = 100;
+        let timeout_ms = 16; // ~1 frame at 60Hz
         
         unsafe {
             let ret = libc::poll(fds.as_mut_ptr(), 1, timeout_ms);
