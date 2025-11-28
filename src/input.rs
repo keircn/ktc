@@ -15,13 +15,21 @@ struct Interface;
 
 impl LibinputInterface for Interface {
     fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
-        OpenOptions::new()
+        match OpenOptions::new()
             .custom_flags(flags)
             .read(flags & libc::O_RDWR != 0)
             .write(flags & libc::O_RDWR != 0)
             .open(path)
-            .map(|file| file.into())
-            .map_err(|err| err.raw_os_error().unwrap_or(-1))
+        {
+            Ok(file) => {
+                log::debug!("[input] Opened device: {}", path.display());
+                Ok(file.into())
+            }
+            Err(err) => {
+                log::warn!("[input] Failed to open {}: {}", path.display(), err);
+                Err(err.raw_os_error().unwrap_or(-1))
+            }
+        }
     }
 
     fn close_restricted(&mut self, fd: OwnedFd) {
@@ -172,6 +180,31 @@ impl InputHandler {
         let mut libinput = Libinput::new_with_udev(Interface);
         libinput.udev_assign_seat("seat0")
             .map_err(|_| "Failed to assign udev seat")?;
+        
+        // Process initial device events to check what was opened
+        libinput.dispatch()?;
+        let mut keyboard_count = 0;
+        let mut pointer_count = 0;
+        for event in &mut libinput {
+            if let Event::Device(input::event::DeviceEvent::Added(added)) = event {
+                let device = added.device();
+                if device.has_capability(input::DeviceCapability::Keyboard) {
+                    keyboard_count += 1;
+                    log::info!("[input] Keyboard device: {}", device.name());
+                }
+                if device.has_capability(input::DeviceCapability::Pointer) {
+                    pointer_count += 1;
+                    log::info!("[input] Pointer device: {}", device.name());
+                }
+            }
+        }
+        
+        if keyboard_count == 0 {
+            log::error!("[input] No keyboard devices found! Check /dev/input permissions or add user to 'input' group");
+        }
+        if pointer_count == 0 {
+            log::warn!("[input] No pointer devices found");
+        }
         
         let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         
