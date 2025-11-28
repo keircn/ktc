@@ -1243,7 +1243,7 @@ impl State {
     }
     
     pub fn update_window_pixel_cache(&mut self, window_id: WindowId) -> bool {
-        let (buffer_id, pool_id, buf_offset, buf_width, buf_height, expected_width, expected_height) = {
+        let (buffer_id, buf_width, buf_height, expected_width, expected_height) = {
             let window = match self.windows.iter().find(|w| w.id == window_id) {
                 Some(w) => w,
                 None => return false,
@@ -1260,7 +1260,7 @@ impl State {
             let expected_w = window.geometry.width;
             let title_bar_height = self.config.title_bar_height();
             let expected_h = (window.geometry.height - title_bar_height).max(1);
-            (buffer_id, buffer_data.pool_id.clone(), buffer_data.offset, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
+            (buffer_id, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
         };
         
         let min_width = (expected_width / 2).max(10) as usize;

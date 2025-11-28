@@ -271,8 +271,6 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 );
             }
             zwp_linux_buffer_params_v1::Request::Create { width, height, format, .. } => {
-                log::info!("[dmabuf] Create buffer: {}x{} format=0x{:08x}", width, height, format);
-                
                 let mut inner = data.inner.lock().unwrap();
                 inner.width = width;
                 inner.height = height;
@@ -292,8 +290,6 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 }
             }
             zwp_linux_buffer_params_v1::Request::CreateImmed { buffer_id, width, height, format, .. } => {
-                log::info!("[dmabuf] CreateImmed buffer: {}x{} format=0x{:08x}", width, height, format);
-                
                 let mut inner = data.inner.lock().unwrap();
                 inner.width = width;
                 inner.height = height;
