@@ -8,3 +8,4 @@ pub mod xdg_output;
 pub mod screencopy;
 pub mod dmabuf;
 pub mod xdg_decoration;
+pub mod output_management;
