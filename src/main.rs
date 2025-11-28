@@ -215,6 +215,26 @@ fn run(config: Config) {
             .expect("Failed to insert input source");
     }
 
+    if let Some(ref gpu) = gpu_renderer {
+        let drm_fd = gpu.drm_fd().try_clone_to_owned()
+            .expect("Failed to clone DRM fd");
+        
+        calloop_loop
+            .handle()
+            .insert_source(
+                calloop::generic::Generic::new(
+                    drm_fd,
+                    calloop::Interest::READ,
+                    calloop::Mode::Level,
+                ),
+                |_, _, data| {
+                    data.vsync_pending = true;
+                    Ok(calloop::PostAction::Continue)
+                },
+            )
+            .expect("Failed to insert DRM source");
+    }
+
     let _timer = calloop_loop.handle()
         .insert_source(
             calloop::timer::Timer::immediate(),
@@ -228,18 +248,46 @@ fn run(config: Config) {
                 }
                 let input_time = input_start.elapsed().as_micros() as u64;
                 
+                if data.vsync_pending {
+                    data.vsync_pending = false;
+                    if let Some(ref mut gpu) = data.state.gpu_renderer {
+                        if gpu.handle_drm_event() {
+                            let time = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u32;
+                            
+                            for callback in data.state.frame_callbacks.drain(..) {
+                                callback.done(time);
+                            }
+                            data.display.flush_clients().ok();
+                        }
+                    }
+                }
+                
                 let profiler_stats = data.frame_profiler.get_stats(&data.state);
                 let show_profiler = data.state.config.debug.profiler;
                 
+                let can_render = data.state.gpu_renderer.as_ref()
+                    .map(|gpu| !gpu.is_flip_pending())
+                    .unwrap_or(true);
+                
                 let render_start = std::time::Instant::now();
-                render(&mut data.state, &mut data.display, data.drm_info.as_mut(), 
-                       if show_profiler { Some(&profiler_stats) } else { None });
+                if can_render {
+                    render(&mut data.state, &mut data.display, data.drm_info.as_mut(), 
+                           if show_profiler { Some(&profiler_stats) } else { None });
+                }
                 let render_time = render_start.elapsed().as_micros() as u64;
                 
                 let total_time = frame_start.elapsed().as_micros() as u64;
                 data.frame_profiler.record_frame(input_time, render_time, total_time, &data.state);
                 
-                calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(16))
+                let timeout = if data.state.gpu_renderer.is_some() {
+                    std::time::Duration::from_millis(1)
+                } else {
+                    std::time::Duration::from_millis(16)
+                };
+                calloop::timer::TimeoutAction::ToDuration(timeout)
             },
         )
         .expect("Failed to insert timer");
@@ -251,6 +299,7 @@ fn run(config: Config) {
         input_handler,
         socket_name,
         input_pending: false,
+        vsync_pending: false,
         frame_profiler: FrameProfiler::new(),
     };
     
@@ -528,18 +577,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         }
     }
     
-    if has_damage || has_frame_callbacks {
-        let time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u32;
-        
-        for callback in state.frame_callbacks.drain(..) {
-            callback.done(time);
-        }
-        
-        display.flush_clients().ok();
-    }
+    display.flush_clients().ok();
 }
 
 fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
@@ -726,6 +764,7 @@ struct LoopData {
     input_handler: Option<input::InputHandler>,
     socket_name: String,
     input_pending: bool,
+    vsync_pending: bool,
     frame_profiler: FrameProfiler,
 }
 

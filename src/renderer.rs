@@ -606,6 +606,52 @@ impl GpuRenderer {
     pub fn get_texture(&self, id: u64) -> Option<&glow::Texture> {
         self.shm_textures.get(&id)
     }
+    
+    pub fn drm_fd(&self) -> BorrowedFd<'_> {
+        self.drm_card.as_fd()
+    }
+    
+    pub fn is_flip_pending(&self) -> bool {
+        self.flip_pending
+    }
+    
+    pub fn handle_drm_event(&mut self) -> bool {
+        if !self.flip_pending {
+            return false;
+        }
+        
+        use std::os::fd::AsRawFd;
+        let fd = self.drm_card.as_fd().as_raw_fd();
+        
+        unsafe {
+            let mut fds = [libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            }];
+            
+            let ret = libc::poll(fds.as_mut_ptr(), 1, 0);
+            if ret > 0 && (fds[0].revents & libc::POLLIN) != 0 {
+                let mut buf = [0u8; 1024];
+                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+                
+                let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
+                if let Some(old_fb) = self.current_fb.take() {
+                    self.drm_card.destroy_framebuffer(old_fb).ok();
+                }
+                if !self.current_bo.is_null() {
+                    gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
+                }
+                self.current_fb = self.next_fb.take();
+                self.current_bo = self.next_bo;
+                self.next_bo = std::ptr::null_mut();
+                self.flip_pending = false;
+                
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl Drop for GpuRenderer {
