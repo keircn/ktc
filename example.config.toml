@@ -1,0 +1,60 @@
+# copy to ~/.config/ktc/config.toml
+
+[appearance]
+# Window title bar height in pixels
+title_bar_height = 24
+
+# Border width around windows (not yet implemented)
+border_width = 1
+
+# Gap between tiled windows (not yet implemented)
+gap = 0
+
+# Background colors for checkerboard pattern (hex format)
+background_dark = "#1A1A2E"
+background_light = "#16213E"
+
+# Title bar colors
+title_focused = "#2D5A88"
+title_unfocused = "#3C3C3C"
+
+# Window border colors
+border_focused = "#4A9EFF"
+border_unfocused = "#505050"
+
+[keyboard]
+# XKB keyboard layout
+layout = "us"
+
+# Keyboard model
+model = "pc105"
+
+# XKB options (e.g., "ctrl:nocaps" to map Caps Lock to Ctrl)
+options = ""
+
+# Key repeat rate (keys per second) - not yet implemented
+repeat_rate = 25
+
+# Delay before key repeat starts (ms) - not yet implemented
+repeat_delay = 600
+
+[cursor]
+# Cursor theme name - not yet implemented
+theme = "default"
+
+# Cursor size in pixels - not yet implemented
+size = 24
+
+[keybinds]
+# Modifier key: "alt", "super", "ctrl" - not yet implemented
+mod_key = "alt"
+
+# Focus next/previous window - not yet implemented
+focus_next = "mod+j"
+focus_prev = "mod+k"
+
+# Close focused window - not yet implemented
+close_window = "mod+shift+q"
+
+# Exit compositor - not yet implemented
+exit = "ctrl+alt+q"
