@@ -327,7 +327,7 @@ impl InputHandler {
         }
     }
     
-    pub fn as_fd(&self) -> BorrowedFd {
+    pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.libinput.as_fd()
     }
 }
