@@ -1132,7 +1132,6 @@ impl State {
             self.damage_tracker.add_damage(new_win.geometry);
         }
         
-        // Send leave to old focused window's keyboards
         if let Some(old_id) = old_focused {
             if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
                 let old_surface = old_window.wl_surface.clone();
@@ -1153,7 +1152,6 @@ impl State {
             }
         }
         
-        // Send enter to new focused window's keyboards
         let new_window_info = self.windows.iter()
             .find(|w| w.id == window_id)
             .map(|w| (w.wl_surface.clone(), w.wl_surface.client()));
@@ -1238,7 +1236,7 @@ impl State {
     }
     
     pub fn update_window_pixel_cache(&mut self, window_id: WindowId) -> bool {
-        let (buffer_id, buf_width, buf_height, expected_width, expected_height) = {
+        let (buffer_id, pool_id, buf_offset, buf_width, buf_height, expected_width, expected_height) = {
             let window = match self.windows.iter().find(|w| w.id == window_id) {
                 Some(w) => w,
                 None => return false,
@@ -1257,8 +1255,13 @@ impl State {
             };
             let expected_w = window.geometry.width;
             let expected_h = (window.geometry.height - TITLE_BAR_HEIGHT).max(1);
-            (buffer_id, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
+            (buffer_id, buffer_data.pool_id, buffer_data.offset, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
         };
+        
+        log::debug!(
+            "[cache] Window {} using buffer_id={} pool_id={} offset={} size={}x{}",
+            window_id, buffer_id, pool_id, buf_offset, buf_width, buf_height
+        );
         
         let min_width = (expected_width / 2).max(10) as usize;
         let min_height = (expected_height / 2).max(10) as usize;

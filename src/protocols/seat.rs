@@ -48,7 +48,6 @@ impl Dispatch<WlSeat, ()> for State {
                     keyboard.repeat_info(25, 600);
                 }
                 
-                // Send keyboard.enter if there's a focused window belonging to this client
                 let enter_info = state.focused_window.and_then(|focused_id| {
                     state.windows.iter()
                         .find(|w| w.id == focused_id)

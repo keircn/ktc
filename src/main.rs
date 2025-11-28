@@ -748,6 +748,13 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                             continue;
                         }
                         
+                        log::debug!(
+                            "[blit] Window {} at ({},{}) size {}x{} cache_ptr={:p} cache_len={} stride={}",
+                            win.id, win.geometry.x, win.geometry.y + TITLE_BAR_HEIGHT,
+                            render_width, render_height,
+                            win.pixel_cache.as_ptr(), win.pixel_cache.len(), win.cache_stride
+                        );
+                        
                         state.canvas.draw_decorations(
                             win.geometry.x, win.geometry.y,
                             render_width, render_height,
