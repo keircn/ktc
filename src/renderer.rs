@@ -91,7 +91,10 @@ pub struct GpuRenderer {
     
     current_fb: Option<framebuffer::Handle>,
     current_bo: *mut gbm_sys::gbm_bo,
+    next_fb: Option<framebuffer::Handle>,
+    next_bo: *mut gbm_sys::gbm_bo,
     mode_set: bool,
+    flip_pending: bool,
     
     texture_program: glow::Program,
     color_program: glow::Program,
@@ -249,7 +252,10 @@ impl GpuRenderer {
             mode,
             current_fb: None,
             current_bo: std::ptr::null_mut(),
+            next_fb: None,
+            next_bo: std::ptr::null_mut(),
             mode_set: false,
+            flip_pending: false,
             texture_program,
             color_program,
             quad_vao,
