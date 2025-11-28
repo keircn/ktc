@@ -1218,7 +1218,7 @@ impl State {
     }
     
     pub fn update_window_pixel_cache(&mut self, window_id: WindowId) -> bool {
-        let (buffer_id, buf_width, buf_height) = {
+        let (buffer_id, buf_width, buf_height, expected_width, expected_height) = {
             let window = match self.windows.iter().find(|w| w.id == window_id) {
                 Some(w) => w,
                 None => return false,
@@ -1232,8 +1232,21 @@ impl State {
                 Some(d) => d,
                 None => return false,
             };
-            (buffer_id, buffer_data.width as usize, buffer_data.height as usize)
+            let expected_w = window.geometry.width;
+            let expected_h = (window.geometry.height - TITLE_BAR_HEIGHT).max(1);
+            (buffer_id, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
         };
+        
+        let min_width = (expected_width / 2).max(10) as usize;
+        let min_height = (expected_height / 2).max(10) as usize;
+        
+        if buf_width < min_width || buf_height < min_height {
+            log::debug!(
+                "[cache] Window {} rejecting buffer {}x{} (expected ~{}x{}, min {}x{})",
+                window_id, buf_width, buf_height, expected_width, expected_height, min_width, min_height
+            );
+            return false;
+        }
         
         let buffer_data = match self.buffers.get(&buffer_id) {
             Some(d) => d.clone(),
