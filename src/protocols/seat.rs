@@ -83,6 +83,19 @@ impl Dispatch<WlPointer, ()> for State {
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {}
+    
+    fn destroyed(
+        state: &mut Self,
+        _client: wayland_server::backend::ClientId,
+        resource: &WlPointer,
+        _data: &(),
+    ) {
+        let pointer_id = resource.id();
+        if let Some(pos) = state.pointers.iter().position(|p| p.id() == pointer_id) {
+            state.pointers.swap_remove(pos);
+            log::info!("[seat] Pointer {:?} destroyed, {} pointers remaining", pointer_id, state.pointers.len());
+        }
+    }
 }
 
 impl Dispatch<WlKeyboard, ()> for State {
@@ -95,6 +108,20 @@ impl Dispatch<WlKeyboard, ()> for State {
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {}
+    
+    fn destroyed(
+        state: &mut Self,
+        _client: wayland_server::backend::ClientId,
+        resource: &WlKeyboard,
+        _data: &(),
+    ) {
+        let keyboard_id = resource.id();
+        state.keyboard_to_window.remove(&keyboard_id);
+        if let Some(pos) = state.keyboards.iter().position(|k| k.id() == keyboard_id) {
+            state.keyboards.swap_remove(pos);
+            log::info!("[seat] Keyboard {:?} destroyed, {} keyboards remaining", keyboard_id, state.keyboards.len());
+        }
+    }
 }
 
 impl Dispatch<WlTouch, ()> for State {

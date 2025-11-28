@@ -7,7 +7,7 @@ mod session;
 use clap::{Parser, Subcommand};
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
-use wayland_server::{Display, ListeningSocket};
+use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
     wl_seat::WlSeat,
@@ -624,10 +624,12 @@ fn process_input_frame(data: &mut StandaloneLoopData) {
     
     if frame.focus_next {
         data.state.focus_next();
+        data.display.flush_clients().ok();
     }
     
     if frame.focus_prev {
         data.state.focus_prev();
+        data.display.flush_clients().ok();
     }
     
     if frame.pointer.has_motion {
@@ -665,6 +667,8 @@ fn process_input_frame(data: &mut StandaloneLoopData) {
             
             let serial = data.state.next_keyboard_serial();
             for keyboard in &focused_keyboards {
+                log::debug!("[input] Sending key {} to keyboard {:?} client={:?}", 
+                    key.keycode, keyboard.id(), keyboard.client().map(|c| c.id()));
                 keyboard.key(serial, 0, key.keycode, wl_state);
                 keyboard.modifiers(serial, key.mods_depressed, key.mods_latched, key.mods_locked, key.group);
             }
