@@ -614,6 +614,10 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         }
     }
     
+    if has_pending_screencopy {
+        state.process_screencopy_frames(true);
+    }
+    
     if has_frame_callbacks {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

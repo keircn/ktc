@@ -700,6 +700,34 @@ impl GpuRenderer {
             }
         }
     }
+    
+    pub fn read_pixels(&self, x: i32, y: i32, width: i32, height: i32) -> Vec<u32> {
+        let mut pixels = vec![0u32; (width * height) as usize];
+        unsafe {
+            self.gl.read_pixels(
+                x,
+                (self.height as i32) - y - height,
+                width,
+                height,
+                glow::BGRA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(std::slice::from_raw_parts_mut(
+                    pixels.as_mut_ptr() as *mut u8,
+                    pixels.len() * 4,
+                ))),
+            );
+        }
+        
+        // Flip vertically since OpenGL has origin at bottom-left
+        let mut flipped = vec![0u32; pixels.len()];
+        for row in 0..height as usize {
+            let src_row = (height as usize - 1 - row) * width as usize;
+            let dst_row = row * width as usize;
+            flipped[dst_row..dst_row + width as usize]
+                .copy_from_slice(&pixels[src_row..src_row + width as usize]);
+        }
+        flipped
+    }
 }
 
 impl Drop for GpuRenderer {
