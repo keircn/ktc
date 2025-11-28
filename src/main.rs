@@ -7,7 +7,7 @@ mod session;
 use clap::{Parser, Subcommand};
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
-use wayland_server::{Display, ListeningSocket, Resource};
+use wayland_server::{Display, ListeningSocket};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
     wl_seat::WlSeat,
@@ -263,7 +263,7 @@ fn run_nested() {
 
 fn run_standalone() {
     use std::fs::OpenOptions;
-    use input::{InputHandler, InputAction};
+    use input::InputHandler;
     
     let _session = match session::Session::new() {
         Ok(s) => {
@@ -386,78 +386,7 @@ fn run_standalone() {
                     calloop::Mode::Level,
                 ),
                 |_, _, data| {
-                    if let Some(ref mut handler) = data.input_handler {
-                        handler.dispatch().ok();
-                        
-                        handler.process_events(|action| {
-                            match action {
-                                InputAction::ExitCompositor => {
-                                    session::request_shutdown();
-                                }
-                                InputAction::LaunchTerminal => {
-                                    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-                                        .unwrap_or_else(|_| "/tmp".to_string());
-                                    
-                                    match std::process::Command::new("foot")
-                                        .env("WAYLAND_DISPLAY", &data.socket_name)
-                                        .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-                                        .stderr(std::process::Stdio::null())
-                                        .spawn() {
-                                        Ok(child) => {
-                                            session::register_child(child.id());
-                                        }
-                                        Err(e) => {
-                                            log::error!("Failed to launch foot: {}", e);
-                                        }
-                                    }
-                                }
-                                InputAction::FocusNext => {
-                                    data.state.focus_next();
-                                    data.display.flush_clients().ok();
-                                }
-                                InputAction::FocusPrev => {
-                                    data.state.focus_prev();
-                                    data.display.flush_clients().ok();
-                                }
-                                InputAction::KeyEvent { keycode, state: key_state, mods_depressed, mods_latched, mods_locked, group } => {
-                                    let focused_keyboards = data.state.get_focused_keyboards();
-                                    
-                                    if !focused_keyboards.is_empty() {
-                                        let wl_state = match key_state {
-                                            KeyState::Pressed => WlKeyState::Pressed,
-                                            KeyState::Released => WlKeyState::Released,
-                                        };
-                                        
-                                        let serial = data.state.next_keyboard_serial();
-                                        for keyboard in focused_keyboards {
-                                            keyboard.key(serial, 0, keycode, wl_state);
-                                            keyboard.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
-                                        }
-                                        data.display.flush_clients().ok();
-                                    }
-                                }
-                                InputAction::PointerMotion { dx, dy } => {
-                                    let (screen_w, screen_h) = data.state.screen_size();
-                                    let new_x = (data.state.pointer_x + dx).clamp(0.0, screen_w as f64 - 1.0);
-                                    let new_y = (data.state.pointer_y + dy).clamp(0.0, screen_h as f64 - 1.0);
-                                    data.state.handle_pointer_motion(new_x, new_y);
-                                    data.display.flush_clients().ok();
-                                }
-                                InputAction::PointerMotionAbsolute { x, y } => {
-                                    data.state.handle_pointer_motion(x, y);
-                                    data.display.flush_clients().ok();
-                                }
-                                InputAction::PointerButton { button, pressed } => {
-                                    data.state.handle_pointer_button(button, pressed);
-                                    data.display.flush_clients().ok();
-                                }
-                                InputAction::PointerAxis { horizontal, vertical } => {
-                                    data.state.handle_pointer_axis(horizontal, vertical);
-                                    data.display.flush_clients().ok();
-                                }
-                            }
-                        });
-                    }
+                    data.input_pending = true;
                     Ok(calloop::PostAction::Continue)
                 },
             )
@@ -468,6 +397,11 @@ fn run_standalone() {
         .insert_source(
             calloop::timer::Timer::immediate(),
             |_deadline, _: &mut (), data| {
+                if data.input_pending {
+                    data.input_pending = false;
+                    process_input_frame(data);
+                }
+                
                 render_standalone(&mut data.state, &mut data.display, data.drm_info.as_mut());
                 calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(16))
             },
@@ -480,6 +414,7 @@ fn run_standalone() {
         drm_info,
         input_handler,
         socket_name,
+        input_pending: false,
     };
     
     if let Some(ref drm) = loop_data.drm_info {
@@ -633,6 +568,94 @@ fn render_frame(
     loop_data.display.flush_clients().ok();
 }
 
+fn process_input_frame(data: &mut StandaloneLoopData) {
+    let handler = match data.input_handler.as_mut() {
+        Some(h) => h,
+        None => return,
+    };
+    
+    handler.dispatch().ok();
+    let frame = handler.poll_frame();
+    
+    if !frame.has_events() {
+        return;
+    }
+    
+    if frame.exit_compositor {
+        session::request_shutdown();
+        return;
+    }
+    
+    if frame.launch_terminal {
+        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+            .unwrap_or_else(|_| "/tmp".to_string());
+        
+        match std::process::Command::new("foot")
+            .env("WAYLAND_DISPLAY", &data.socket_name)
+            .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+            .stderr(std::process::Stdio::null())
+            .spawn() {
+            Ok(child) => {
+                session::register_child(child.id());
+            }
+            Err(e) => {
+                log::error!("Failed to launch foot: {}", e);
+            }
+        }
+    }
+    
+    if frame.focus_next {
+        data.state.focus_next();
+    }
+    
+    if frame.focus_prev {
+        data.state.focus_prev();
+    }
+    
+    if frame.pointer.has_motion {
+        let (screen_w, screen_h) = data.state.screen_size();
+        
+        if let (Some(x), Some(y)) = (frame.pointer.absolute_x, frame.pointer.absolute_y) {
+            data.state.handle_pointer_motion(x, y);
+        } else if frame.pointer.accumulated_dx != 0.0 || frame.pointer.accumulated_dy != 0.0 {
+            let new_x = (data.state.pointer_x + frame.pointer.accumulated_dx)
+                .clamp(0.0, screen_w as f64 - 1.0);
+            let new_y = (data.state.pointer_y + frame.pointer.accumulated_dy)
+                .clamp(0.0, screen_h as f64 - 1.0);
+            data.state.handle_pointer_motion(new_x, new_y);
+        }
+    }
+    
+    for button in &frame.buttons {
+        data.state.handle_pointer_button(button.button, button.pressed);
+    }
+    
+    if frame.pointer.has_scroll {
+        data.state.handle_pointer_axis(
+            frame.pointer.scroll_horizontal,
+            frame.pointer.scroll_vertical,
+        );
+    }
+    
+    let focused_keyboards = data.state.get_focused_keyboards();
+    if !focused_keyboards.is_empty() {
+        for key in &frame.keys {
+            let wl_state = match key.state {
+                KeyState::Pressed => WlKeyState::Pressed,
+                KeyState::Released => WlKeyState::Released,
+            };
+            
+            let serial = data.state.next_keyboard_serial();
+            for keyboard in &focused_keyboards {
+                keyboard.key(serial, 0, key.keycode, wl_state);
+                keyboard.modifiers(serial, key.mods_depressed, key.mods_latched, key.mods_locked, key.group);
+            }
+        }
+    }
+    
+    data.display.flush_clients().ok();
+}
+
 fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
     if state.needs_relayout {
         state.needs_relayout = false;
@@ -769,6 +792,7 @@ struct StandaloneLoopData {
     drm_info: Option<DrmInfo>,
     input_handler: Option<input::InputHandler>,
     socket_name: String,
+    input_pending: bool,
 }
 
 struct DrmInfo {
