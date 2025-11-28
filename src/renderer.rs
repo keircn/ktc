@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::os::fd::{OwnedFd, BorrowedFd, AsFd};
 use std::rc::Rc;
 
-use drm::control::Device as ControlDevice;
+use drm::control::{Device as ControlDevice, crtc, connector, framebuffer};
 use gbm::{AsRaw, BufferObjectFlags, Device as GbmDevice};
 use glow::HasContext;
 use khronos_egl as egl;
@@ -83,6 +83,12 @@ pub struct GpuRenderer {
     
     #[allow(dead_code)]
     gbm: GbmDevice<std::fs::File>,
+    gbm_surface: *mut std::ffi::c_void,
+    drm_card: DrmCard,
+    crtc: crtc::Handle,
+    connector: connector::Handle,
+    mode: drm::control::Mode,
+    current_fb: Option<framebuffer::Handle>,
     
     texture_program: glow::Program,
     color_program: glow::Program,
@@ -135,12 +141,18 @@ impl GpuRenderer {
             .find(|c| c.state() == drm::control::connector::State::Connected)
             .ok_or("No connected display found")?;
         
-        let mode = connector_info.modes().first()
+        let connector_handle = connector_info.handle();
+        
+        let mode = *connector_info.modes().first()
             .ok_or("No display mode available")?;
         
         let (width, height) = mode.size();
         let width = width as u32;
         let height = height as u32;
+        
+        let crtc_handle = res.crtcs().first()
+            .copied()
+            .ok_or("No CRTC available")?;
         
         log::info!("[gpu] Display mode: {}x{}", width, height);
         
@@ -217,6 +229,9 @@ impl GpuRenderer {
         let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
         let supported_formats = Self::query_dmabuf_formats();
         log::info!("[gpu] Supported DMA-BUF formats: {}", supported_formats.len());
+        
+        // Keep the raw pointer but don't forget the surface - we'll manage it via the pointer
+        let gbm_surface_raw = gbm_surface.as_raw() as *mut std::ffi::c_void;
         std::mem::forget(gbm_surface);
         
         Ok(Self {
@@ -226,6 +241,12 @@ impl GpuRenderer {
             surface,
             gl,
             gbm,
+            gbm_surface: gbm_surface_raw,
+            drm_card: card,
+            crtc: crtc_handle,
+            connector: connector_handle,
+            mode,
+            current_fb: None,
             texture_program,
             color_program,
             quad_vao,
@@ -335,7 +356,74 @@ impl GpuRenderer {
     }
     
     pub fn end_frame(&mut self) {
+        unsafe { self.gl.finish(); }
+        
         self.egl.swap_buffers(self.display, self.surface).ok();
+        
+        unsafe {
+            let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
+            let bo = gbm_sys::gbm_surface_lock_front_buffer(gbm_surface);
+            if bo.is_null() {
+                log::error!("[gpu] Failed to lock front buffer");
+                return;
+            }
+            
+            let handle = gbm_sys::gbm_bo_get_handle(bo).u32_;
+            let stride = gbm_sys::gbm_bo_get_stride(bo);
+            let width = gbm_sys::gbm_bo_get_width(bo);
+            let height = gbm_sys::gbm_bo_get_height(bo);
+            
+            // Create a wrapper that implements Buffer trait
+            struct GbmBuffer {
+                handle: u32,
+                width: u32,
+                height: u32,
+                stride: u32,
+            }
+            
+            impl drm::buffer::Buffer for GbmBuffer {
+                fn size(&self) -> (u32, u32) {
+                    (self.width, self.height)
+                }
+                fn format(&self) -> drm::buffer::DrmFourcc {
+                    drm::buffer::DrmFourcc::Xrgb8888
+                }
+                fn pitch(&self) -> u32 {
+                    self.stride
+                }
+                fn handle(&self) -> drm::buffer::Handle {
+                    drm::buffer::Handle::from(std::num::NonZeroU32::new(self.handle).unwrap())
+                }
+            }
+            
+            let buffer = GbmBuffer { handle, width, height, stride };
+            
+            let fb = match self.drm_card.add_framebuffer(&buffer, 24, 32) {
+                Ok(fb) => fb,
+                Err(e) => {
+                    log::error!("[gpu] Failed to add framebuffer: {}", e);
+                    gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
+                    return;
+                }
+            };
+            
+            if let Err(e) = self.drm_card.set_crtc(
+                self.crtc,
+                Some(fb),
+                (0, 0),
+                &[self.connector],
+                Some(self.mode),
+            ) {
+                log::error!("[gpu] set_crtc failed: {}", e);
+            }
+            
+            if let Some(old_fb) = self.current_fb.take() {
+                self.drm_card.destroy_framebuffer(old_fb).ok();
+            }
+            self.current_fb = Some(fb);
+            
+            gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
+        }
     }
     
     pub fn draw_rect(&self, x: i32, y: i32, width: i32, height: i32, color: [f32; 4]) {
