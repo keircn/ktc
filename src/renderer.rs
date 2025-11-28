@@ -129,6 +129,7 @@ pub struct DmaBufInfo {
 }
 
 impl GpuRenderer {
+    #[allow(dead_code)]
     pub fn new(drm_device: std::fs::File) -> Result<Self, Box<dyn std::error::Error>> {
         Self::new_with_config(drm_device, None, true)
     }
