@@ -315,7 +315,7 @@ fn process_input(data: &mut LoopData) {
         let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
             .unwrap_or_else(|_| "/tmp".to_string());
         
-        match std::process::Command::new("foot")
+        match std::process::Command::new("kitty")
             .env("WAYLAND_DISPLAY", &data.socket_name)
             .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
             .stderr(std::process::Stdio::null())
@@ -324,7 +324,7 @@ fn process_input(data: &mut LoopData) {
                 session::register_child(child.id());
             }
             Err(e) => {
-                log::error!("Failed to launch foot: {}", e);
+                log::error!("Failed to launch terminal: {}", e);
             }
         }
     }
