@@ -34,6 +34,20 @@ pub struct Config {
     pub keyboard: KeyboardConfig,
     pub cursor: CursorConfig,
     pub keybinds: KeybindsConfig,
+    pub debug: DebugConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct DebugConfig {
+    #[serde(default)]
+    pub profiler: bool,
+}
+
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self { profiler: false }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

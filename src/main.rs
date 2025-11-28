@@ -228,8 +228,12 @@ fn run(config: Config) {
                 }
                 let input_time = input_start.elapsed().as_micros() as u64;
                 
+                let profiler_stats = data.frame_profiler.get_stats(&data.state);
+                let show_profiler = data.state.config.debug.profiler;
+                
                 let render_start = std::time::Instant::now();
-                render(&mut data.state, &mut data.display, data.drm_info.as_mut());
+                render(&mut data.state, &mut data.display, data.drm_info.as_mut(), 
+                       if show_profiler { Some(&profiler_stats) } else { None });
                 let render_time = render_start.elapsed().as_micros() as u64;
                 
                 let total_time = frame_start.elapsed().as_micros() as u64;
@@ -385,16 +389,16 @@ fn process_input(data: &mut LoopData) {
     data.display.flush_clients().ok();
 }
 
-fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
+fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>, profiler_stats: Option<&renderer::ProfilerStats>) {
     if state.gpu_renderer.is_some() {
-        render_gpu(state, display);
+        render_gpu(state, display, profiler_stats);
         return;
     }
     
     render_cpu(state, display, drm_info);
 }
 
-fn render_gpu(state: &mut State, display: &mut Display<State>) {
+fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: Option<&renderer::ProfilerStats>) {
     if state.needs_relayout {
         state.needs_relayout = false;
         state.relayout_windows();
@@ -404,12 +408,13 @@ fn render_gpu(state: &mut State, display: &mut Display<State>) {
     let has_pending_screencopy = !state.screencopy_frames.is_empty();
     let has_frame_callbacks = !state.frame_callbacks.is_empty();
     let has_damage = state.damage_tracker.has_damage();
+    let has_profiler = profiler_stats.is_some();
     
-    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
+    if !has_damage && !has_pending_screencopy && !has_frame_callbacks && !has_profiler {
         return;
     }
     
-    let needs_render = has_damage || has_pending_screencopy;
+    let needs_render = has_damage || has_pending_screencopy || has_profiler;
     
     if needs_render {
         let bg_dark = state.config.background_dark();
@@ -486,6 +491,10 @@ fn render_gpu(state: &mut State, display: &mut Display<State>) {
                 *cache_w as i32,
                 *cache_h as i32,
             );
+        }
+        
+        if let Some(stats) = profiler_stats {
+            gpu.draw_profiler(stats);
         }
         
         gpu.end_frame();
@@ -712,6 +721,12 @@ struct FrameProfiler {
     render_time_us: u64,
     total_time_us: u64,
     slow_frames: u32,
+    last_fps: f32,
+    last_frame_time_ms: f32,
+    last_render_us: u64,
+    last_input_us: u64,
+    fps_update_time: std::time::Instant,
+    fps_frame_count: u64,
 }
 
 impl FrameProfiler {
@@ -723,17 +738,34 @@ impl FrameProfiler {
             render_time_us: 0,
             total_time_us: 0,
             slow_frames: 0,
+            last_fps: 0.0,
+            last_frame_time_ms: 0.0,
+            last_render_us: 0,
+            last_input_us: 0,
+            fps_update_time: std::time::Instant::now(),
+            fps_frame_count: 0,
         }
     }
     
     fn record_frame(&mut self, input_us: u64, render_us: u64, total_us: u64, state: &State) {
         self.frame_count += 1;
+        self.fps_frame_count += 1;
         self.input_time_us += input_us;
         self.render_time_us += render_us;
         self.total_time_us += total_us;
+        self.last_render_us = render_us;
+        self.last_input_us = input_us;
+        self.last_frame_time_ms = total_us as f32 / 1000.0;
         
         if total_us > 16666 {
             self.slow_frames += 1;
+        }
+        
+        let fps_elapsed = self.fps_update_time.elapsed();
+        if fps_elapsed.as_millis() >= 500 {
+            self.last_fps = self.fps_frame_count as f32 / fps_elapsed.as_secs_f32();
+            self.fps_frame_count = 0;
+            self.fps_update_time = std::time::Instant::now();
         }
         
         if self.last_log_time.elapsed().as_secs() >= 5 {
@@ -755,6 +787,28 @@ impl FrameProfiler {
             self.total_time_us = 0;
             self.slow_frames = 0;
             self.last_log_time = std::time::Instant::now();
+        }
+    }
+    
+    fn get_stats(&self, state: &State) -> renderer::ProfilerStats {
+        let canvas_bytes = state.canvas.pixels.len() * 4;
+        let window_cache_bytes: usize = state.windows.iter()
+            .map(|w| w.pixel_cache.len() * 4)
+            .sum();
+        let memory_mb = (canvas_bytes + window_cache_bytes) as f32 / (1024.0 * 1024.0);
+        
+        let texture_count = state.gpu_renderer.as_ref()
+            .map(|r| r.texture_count())
+            .unwrap_or(0);
+        
+        renderer::ProfilerStats {
+            fps: self.last_fps,
+            frame_time_ms: self.last_frame_time_ms,
+            render_time_us: self.last_render_us,
+            input_time_us: self.last_input_us,
+            memory_mb,
+            window_count: state.windows.len(),
+            texture_count,
         }
     }
     

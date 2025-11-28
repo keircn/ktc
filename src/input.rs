@@ -181,7 +181,6 @@ impl InputHandler {
         libinput.udev_assign_seat("seat0")
             .map_err(|_| "Failed to assign udev seat")?;
         
-        // Process initial device events to check what was opened
         libinput.dispatch()?;
         let mut keyboard_count = 0;
         let mut pointer_count = 0;

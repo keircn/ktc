@@ -58,3 +58,7 @@ close_window = "mod+shift+q"
 
 # Exit compositor - not yet implemented
 exit = "ctrl+alt+q"
+
+[debug]
+# Show on-screen profiler overlay (FPS, frame time, memory usage)
+profiler = false

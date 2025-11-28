@@ -621,3 +621,91 @@ fn bytemuck_cast_slice(data: &[f32]) -> &[u8] {
         )
     }
 }
+
+pub struct ProfilerStats {
+    pub fps: f32,
+    pub frame_time_ms: f32,
+    pub render_time_us: u64,
+    pub input_time_us: u64,
+    pub memory_mb: f32,
+    pub window_count: usize,
+    pub texture_count: usize,
+}
+
+const FONT_DATA: &[u8] = include_bytes!("font5x7.raw");
+const FONT_CHAR_WIDTH: u32 = 5;
+const FONT_CHAR_HEIGHT: u32 = 7;
+const FONT_CHARS_PER_ROW: u32 = 16;
+
+impl GpuRenderer {
+    pub fn draw_profiler(&mut self, stats: &ProfilerStats) {
+        let lines = [
+            format!("FPS: {:.1}", stats.fps),
+            format!("Frame: {:.2}ms", stats.frame_time_ms),
+            format!("Render: {}us", stats.render_time_us),
+            format!("Input: {}us", stats.input_time_us),
+            format!("Mem: {:.1}MB", stats.memory_mb),
+            format!("Windows: {}", stats.window_count),
+            format!("Textures: {}", stats.texture_count),
+        ];
+        
+        let scale = 2;
+        let char_w = (FONT_CHAR_WIDTH * scale) as i32;
+        let char_h = (FONT_CHAR_HEIGHT * scale) as i32;
+        let line_height = char_h + 2;
+        let padding = 8;
+        
+        let max_chars = lines.iter().map(|l| l.len()).max().unwrap_or(0) as i32;
+        let box_width = max_chars * char_w + padding * 2;
+        let box_height = (lines.len() as i32) * line_height + padding * 2;
+        
+        let box_x = self.width as i32 - box_width - 10;
+        let box_y = 10;
+        
+        self.draw_rect(box_x, box_y, box_width, box_height, [0.0, 0.0, 0.0, 0.7]);
+        
+        for (i, line) in lines.iter().enumerate() {
+            let text_x = box_x + padding;
+            let text_y = box_y + padding + (i as i32) * line_height;
+            self.draw_text(line, text_x, text_y, scale);
+        }
+    }
+    
+    fn draw_text(&mut self, text: &str, x: i32, y: i32, scale: u32) {
+        let char_w = FONT_CHAR_WIDTH * scale;
+        
+        for (i, ch) in text.chars().enumerate() {
+            let char_x = x + (i as i32) * (char_w as i32);
+            self.draw_char(ch, char_x, y, scale);
+        }
+    }
+    
+    fn draw_char(&mut self, ch: char, x: i32, y: i32, scale: u32) {
+        let idx = if ch.is_ascii() && ch >= ' ' {
+            (ch as u32) - 32
+        } else {
+            0
+        };
+        
+        let font_x = (idx % FONT_CHARS_PER_ROW) * FONT_CHAR_WIDTH;
+        let font_y = (idx / FONT_CHARS_PER_ROW) * FONT_CHAR_HEIGHT;
+        
+        for cy in 0..FONT_CHAR_HEIGHT {
+            for cx in 0..FONT_CHAR_WIDTH {
+                let px = font_x + cx;
+                let py = font_y + cy;
+                let byte_idx = (py * (FONT_CHARS_PER_ROW * FONT_CHAR_WIDTH) + px) as usize;
+                
+                if byte_idx < FONT_DATA.len() && FONT_DATA[byte_idx] > 127 {
+                    let screen_x = x + (cx * scale) as i32;
+                    let screen_y = y + (cy * scale) as i32;
+                    self.draw_rect(screen_x, screen_y, scale as i32, scale as i32, [1.0, 1.0, 1.0, 1.0]);
+                }
+            }
+        }
+    }
+    
+    pub fn texture_count(&self) -> usize {
+        self.shm_textures.len() + self.dmabuf_textures.len()
+    }
+}
