@@ -6,3 +6,4 @@ pub mod data_device;
 pub mod subcompositor;
 pub mod xdg_output;
 pub mod screencopy;
+pub mod dmabuf;

@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::ffi::CString;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{OwnedFd, BorrowedFd, AsFd};
 use std::rc::Rc;
 
 use drm::control::Device as ControlDevice;
-use gbm::{BufferObject, BufferObjectFlags, Device as GbmDevice};
+use gbm::{AsRaw, BufferObjectFlags, Device as GbmDevice};
 use glow::HasContext;
 use khronos_egl as egl;
 
@@ -12,13 +11,20 @@ pub type GlowContext = glow::Context;
 
 const EGL_PLATFORM_GBM_KHR: egl::Enum = 0x31D7;
 
-// EGL_EXT_image_dma_buf_import
+// EGL_EXT_image_dma_buf_import (for future DMA-BUF texture import)
+#[allow(dead_code)]
 const EGL_LINUX_DMA_BUF_EXT: egl::Enum = 0x3270;
+#[allow(dead_code)]
 const EGL_LINUX_DRM_FOURCC_EXT: egl::Int = 0x3271;
+#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_FD_EXT: egl::Int = 0x3272;
+#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_OFFSET_EXT: egl::Int = 0x3273;
+#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_PITCH_EXT: egl::Int = 0x3274;
+#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: egl::Int = 0x3443;
+#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: egl::Int = 0x3444;
 
 const VERTEX_SHADER: &str = r#"#version 100
@@ -57,16 +63,16 @@ void main() {
 }
 "#;
 
-const FRAGMENT_SHADER_EXTERNAL: &str = r#"#version 100
-#extension GL_OES_EGL_image_external : require
-precision mediump float;
-varying vec2 v_texcoord;
-uniform samplerExternalOES u_texture;
+struct DrmCard(std::fs::File);
 
-void main() {
-    gl_FragColor = texture2D(u_texture, v_texcoord);
+impl AsFd for DrmCard {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
 }
-"#;
+
+impl drm::Device for DrmCard {}
+impl ControlDevice for DrmCard {}
 
 pub struct GpuRenderer {
     egl: Rc<egl::DynamicInstance<egl::EGL1_5>>,
@@ -75,29 +81,21 @@ pub struct GpuRenderer {
     surface: egl::Surface,
     gl: Rc<GlowContext>,
     
+    #[allow(dead_code)]
     gbm: GbmDevice<std::fs::File>,
-    front_bo: Option<BufferObject<()>>,
-    back_bo: Option<BufferObject<()>>,
     
     texture_program: glow::Program,
     color_program: glow::Program,
-    external_program: Option<glow::Program>,
     quad_vao: glow::VertexArray,
+    #[allow(dead_code)]
     quad_vbo: glow::Buffer,
     
     width: u32,
     height: u32,
     
-    // Texture cache for client buffers
     shm_textures: HashMap<u64, glow::Texture>,
     dmabuf_textures: HashMap<u64, (glow::Texture, egl::Image)>,
     
-    // DRM for page flipping
-    drm_fd: RawFd,
-    crtc: drm::control::crtc::Handle,
-    connector: drm::control::connector::Handle,
-    
-    // Supported DMA-BUF formats
     pub supported_formats: Vec<DmaBufFormat>,
 }
 
@@ -107,6 +105,7 @@ pub struct DmaBufFormat {
     pub modifier: u64,
 }
 
+#[allow(dead_code)]
 pub struct DmaBufInfo {
     pub fd: OwnedFd,
     pub width: u32,
@@ -119,28 +118,23 @@ pub struct DmaBufInfo {
 
 impl GpuRenderer {
     pub fn new(drm_device: std::fs::File) -> Result<Self, Box<dyn std::error::Error>> {
-        let drm_fd = drm_device.as_raw_fd();
+        let gbm = GbmDevice::new(drm_device.try_clone()?)?;
         
-        // Create GBM device
-        let gbm = GbmDevice::new(drm_device)?;
-        
-        // Load EGL dynamically
         let egl = Rc::new(unsafe { 
             egl::DynamicInstance::<egl::EGL1_5>::load_required()
                 .map_err(|e| format!("Failed to load EGL: {:?}", e))?
         });
         
-        // Get DRM resources
-        let res = gbm.resource_handles()?;
+        let card = DrmCard(drm_device.try_clone()?);
+        let res = card.resource_handles()?;
         let connectors: Vec<_> = res.connectors().iter()
-            .filter_map(|&conn| gbm.get_connector(conn, true).ok())
+            .filter_map(|&conn| card.get_connector(conn, true).ok())
             .collect();
         
         let connector_info = connectors.iter()
             .find(|c| c.state() == drm::control::connector::State::Connected)
             .ok_or("No connected display found")?;
         
-        let connector = connector_info.handle();
         let mode = connector_info.modes().first()
             .ok_or("No display mode available")?;
         
@@ -148,34 +142,25 @@ impl GpuRenderer {
         let width = width as u32;
         let height = height as u32;
         
-        let crtc = res.crtcs().first()
-            .copied()
-            .ok_or("No CRTC available")?;
-        
         log::info!("[gpu] Display mode: {}x{}", width, height);
         
-        // Create EGL display using GBM platform
+        let gbm_ptr = gbm.as_raw() as *mut std::ffi::c_void;
         let display = unsafe {
-            let gbm_ptr = gbm.as_raw() as *mut std::ffi::c_void;
             egl.get_platform_display(EGL_PLATFORM_GBM_KHR, gbm_ptr, &[egl::NONE as egl::Attrib])
-                .ok_or("Failed to get EGL display")?
+                .map_err(|e| format!("Failed to get EGL display: {:?}", e))?
         };
         
         egl.initialize(display)?;
         
-        // Check extensions
         let extensions = egl.query_string(Some(display), egl::EXTENSIONS)
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         
-        log::info!("[gpu] EGL extensions: {}", extensions);
+        log::info!("[gpu] EGL extensions available");
         
         let has_dmabuf_import = extensions.contains("EGL_EXT_image_dma_buf_import");
-        let has_external_image = extensions.contains("GL_OES_EGL_image_external");
+        log::info!("[gpu] DMA-BUF import: {}", has_dmabuf_import);
         
-        log::info!("[gpu] DMA-BUF import: {}, External image: {}", has_dmabuf_import, has_external_image);
-        
-        // Choose EGL config
         let config_attribs = [
             egl::SURFACE_TYPE, egl::WINDOW_BIT,
             egl::RENDERABLE_TYPE, egl::OPENGL_ES2_BIT,
@@ -189,7 +174,6 @@ impl GpuRenderer {
         let config = egl.choose_first_config(display, &config_attribs)?
             .ok_or("No suitable EGL config")?;
         
-        // Create GBM surface for rendering
         let gbm_surface = gbm.create_surface::<()>(
             width,
             height,
@@ -197,20 +181,18 @@ impl GpuRenderer {
             BufferObjectFlags::SCANOUT | BufferObjectFlags::RENDERING,
         )?;
         
-        // Create EGL surface
+        let gbm_surface_ptr = gbm_surface.as_raw() as *mut std::ffi::c_void;
         let surface = unsafe {
             egl.create_platform_window_surface(
                 display,
                 config,
-                gbm_surface.as_raw() as *mut std::ffi::c_void,
+                gbm_surface_ptr,
                 &[egl::NONE as egl::Attrib],
             )?
         };
         
-        // Bind OpenGL ES API
         egl.bind_api(egl::OPENGL_ES_API)?;
         
-        // Create EGL context
         let context_attribs = [
             egl::CONTEXT_CLIENT_VERSION, 2,
             egl::NONE,
@@ -218,14 +200,11 @@ impl GpuRenderer {
         
         let context = egl.create_context(display, config, None, &context_attribs)?;
         
-        // Make context current
         egl.make_current(display, Some(surface), Some(surface), Some(context))?;
         
-        // Load OpenGL functions
         let gl = Rc::new(unsafe {
             GlowContext::from_loader_function(|s| {
-                let c_str = CString::new(s).unwrap();
-                egl.get_proc_address(c_str.as_c_str())
+                egl.get_proc_address(s)
                     .map(|p| p as *const _)
                     .unwrap_or(std::ptr::null())
             })
@@ -233,24 +212,11 @@ impl GpuRenderer {
         
         log::info!("[gpu] OpenGL version: {:?}", unsafe { gl.get_parameter_string(glow::VERSION) });
         log::info!("[gpu] OpenGL renderer: {:?}", unsafe { gl.get_parameter_string(glow::RENDERER) });
-        
-        // Create shader programs
         let texture_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_TEXTURE)?;
         let color_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_COLOR)?;
-        let external_program = if has_external_image {
-            Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_EXTERNAL).ok()
-        } else {
-            None
-        };
-        
-        // Create quad VAO/VBO
         let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
-        
-        // Query supported DMA-BUF formats
-        let supported_formats = Self::query_dmabuf_formats(&egl, display);
+        let supported_formats = Self::query_dmabuf_formats();
         log::info!("[gpu] Supported DMA-BUF formats: {}", supported_formats.len());
-        
-        // Leak the GBM surface to keep it alive
         std::mem::forget(gbm_surface);
         
         Ok(Self {
@@ -260,20 +226,14 @@ impl GpuRenderer {
             surface,
             gl,
             gbm,
-            front_bo: None,
-            back_bo: None,
             texture_program,
             color_program,
-            external_program,
             quad_vao,
             quad_vbo,
             width,
             height,
             shm_textures: HashMap::new(),
             dmabuf_textures: HashMap::new(),
-            drm_fd,
-            crtc,
-            connector,
             supported_formats,
         })
     }
@@ -355,8 +315,7 @@ impl GpuRenderer {
         }
     }
     
-    fn query_dmabuf_formats(_egl: &egl::DynamicInstance<egl::EGL1_5>, _display: egl::Display) -> Vec<DmaBufFormat> {
-        // Common formats that most GPUs support
+    fn query_dmabuf_formats() -> Vec<DmaBufFormat> {
         vec![
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Argb8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Xrgb8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
@@ -377,7 +336,6 @@ impl GpuRenderer {
     
     pub fn end_frame(&mut self) {
         self.egl.swap_buffers(self.display, self.surface).ok();
-        // Page flip would happen here in a full implementation
     }
     
     pub fn draw_rect(&self, x: i32, y: i32, width: i32, height: i32, color: [f32; 4]) {
@@ -424,7 +382,7 @@ impl GpuRenderer {
                 0,
                 glow::BGRA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(data),
+                glow::PixelUnpackData::Slice(Some(data)),
             );
             
             texture
@@ -453,59 +411,6 @@ impl GpuRenderer {
         }
     }
     
-    pub fn import_dmabuf(&mut self, id: u64, info: &DmaBufInfo) -> Option<glow::Texture> {
-        // Create EGL image from DMA-BUF
-        let attribs = [
-            egl::WIDTH as egl::Attrib, info.width as egl::Attrib,
-            egl::HEIGHT as egl::Attrib, info.height as egl::Attrib,
-            EGL_LINUX_DRM_FOURCC_EXT as egl::Attrib, info.format as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib, info.fd.as_raw_fd() as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib, info.offset as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib, info.stride as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT as egl::Attrib, (info.modifier & 0xFFFFFFFF) as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT as egl::Attrib, (info.modifier >> 32) as egl::Attrib,
-            egl::NONE as egl::Attrib,
-        ];
-        
-        let image = unsafe {
-            self.egl.create_image(
-                self.display,
-                egl::NO_CONTEXT,
-                EGL_LINUX_DMA_BUF_EXT,
-                egl::NO_CLIENT_BUFFER,
-                &attribs,
-            ).ok()?
-        };
-        
-        // Create GL texture and bind EGL image to it
-        let texture = unsafe {
-            let tex = self.gl.create_texture().ok()?;
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-            
-            // glEGLImageTargetTexture2DOES
-            type GlEglImageTargetTexture2DOES = extern "system" fn(u32, *const std::ffi::c_void);
-            let func_name = CString::new("glEGLImageTargetTexture2DOES").unwrap();
-            if let Some(func_ptr) = self.egl.get_proc_address(func_name.as_c_str()) {
-                let func: GlEglImageTargetTexture2DOES = std::mem::transmute(func_ptr);
-                func(glow::TEXTURE_2D, image.as_ptr());
-            }
-            
-            tex
-        };
-        
-        // Store for cleanup
-        if let Some((old_tex, old_img)) = self.dmabuf_textures.insert(id, (texture, image)) {
-            unsafe {
-                self.gl.delete_texture(old_tex);
-                self.egl.destroy_image(self.display, old_img).ok();
-            }
-        }
-        
-        Some(texture)
-    }
-    
     pub fn remove_texture(&mut self, id: u64) {
         if let Some(tex) = self.shm_textures.remove(&id) {
             unsafe { self.gl.delete_texture(tex); }
@@ -521,15 +426,10 @@ impl GpuRenderer {
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
-    
-    pub fn gl(&self) -> &GlowContext {
-        &self.gl
-    }
 }
 
 impl Drop for GpuRenderer {
     fn drop(&mut self) {
-        // Cleanup textures
         for (_, tex) in self.shm_textures.drain() {
             unsafe { self.gl.delete_texture(tex); }
         }
@@ -540,18 +440,13 @@ impl Drop for GpuRenderer {
             }
         }
         
-        // Cleanup GL resources
         unsafe {
             self.gl.delete_program(self.texture_program);
             self.gl.delete_program(self.color_program);
-            if let Some(prog) = self.external_program {
-                self.gl.delete_program(prog);
-            }
             self.gl.delete_vertex_array(self.quad_vao);
             self.gl.delete_buffer(self.quad_vbo);
         }
         
-        // Cleanup EGL
         self.egl.destroy_surface(self.display, self.surface).ok();
         self.egl.destroy_context(self.display, self.context).ok();
         self.egl.terminate(self.display).ok();
@@ -562,7 +457,7 @@ fn bytemuck_cast_slice(data: &[f32]) -> &[u8] {
     unsafe {
         std::slice::from_raw_parts(
             data.as_ptr() as *const u8,
-            data.len() * std::mem::size_of::<f32>(),
+            std::mem::size_of_val(data),
         )
     }
 }

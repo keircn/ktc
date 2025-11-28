@@ -4,6 +4,7 @@ mod input;
 mod logging;
 mod session;
 mod config;
+mod renderer;
 
 use config::Config;
 use input::KeyState;
@@ -20,8 +21,10 @@ use wayland_server::protocol::{
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
+use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use std::sync::Arc;
 use state::State;
+use protocols::dmabuf::DmaBufGlobal;
 
 fn main() {
     if unsafe { libc::geteuid() } == 0 {
@@ -41,7 +44,7 @@ fn main() {
     run(config);
 }
 
-fn setup_wayland() -> (Display<State>, ListeningSocket) {
+fn setup_wayland(has_gpu: bool) -> (Display<State>, ListeningSocket) {
     let display = Display::<State>::new().expect("Failed to create display");
     let dh = display.handle();
     
@@ -54,6 +57,11 @@ fn setup_wayland() -> (Display<State>, ListeningSocket) {
     dh.create_global::<State, WlDataDeviceManager, _>(3, ());
     dh.create_global::<State, ZxdgOutputManagerV1, _>(3, ());
     dh.create_global::<State, ZwlrScreencopyManagerV1, _>(3, ());
+    
+    if has_gpu {
+        dh.create_global::<State, ZwpLinuxDmabufV1, _>(4, DmaBufGlobal);
+        log::info!("DMA-BUF protocol enabled (GPU acceleration available)");
+    }
 
     let socket = ListeningSocket::bind_auto("wayland", 0..32)
         .expect("Failed to create socket");
@@ -79,31 +87,35 @@ fn run(config: Config) {
         }
     };
     
-    let (mut display, socket) = setup_wayland();
-    
-    let socket_name = socket.socket_name()
-        .expect("Failed to get socket name")
-        .to_string_lossy()
-        .to_string();
-
     let drm_device = OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/dri/card0")
         .or_else(|_| OpenOptions::new().read(true).write(true).open("/dev/dri/card1"));
 
-    let drm_info = match drm_device {
+    let (gpu_renderer, drm_info) = match drm_device {
         Ok(device) => {
             log::info!("Opened DRM device");
-            match setup_drm(&device) {
-                Ok(info) => {
-                    log::info!("DRM setup complete: {}x{}", info.width, info.height);
-                    Some(info)
+            
+            match renderer::GpuRenderer::new(device.try_clone().unwrap()) {
+                Ok(gpu) => {
+                    let (w, h) = gpu.size();
+                    log::info!("GPU renderer initialized: {}x{}", w, h);
+                    (Some(gpu), None)
                 }
                 Err(e) => {
-                    log::error!("Failed to setup DRM: {}", e);
-                    log::warn!("Running in headless mode");
-                    None
+                    log::warn!("GPU renderer failed: {}, falling back to CPU", e);
+                    match setup_drm(&device) {
+                        Ok(info) => {
+                            log::info!("DRM setup complete: {}x{}", info.width, info.height);
+                            (None, Some(info))
+                        }
+                        Err(e) => {
+                            log::error!("Failed to setup DRM: {}", e);
+                            log::warn!("Running in headless mode");
+                            (None, None)
+                        }
+                    }
                 }
             }
         }
@@ -111,9 +123,17 @@ fn run(config: Config) {
             log::error!("Failed to open DRM device: {}", e);
             log::warn!("Running in headless mode (no display output)");
             log::info!("Make sure you're in the 'video' group: sudo usermod -aG video $USER");
-            None
+            (None, None)
         }
     };
+
+    let has_gpu = gpu_renderer.is_some();
+    let (mut display, socket) = setup_wayland(has_gpu);
+    
+    let socket_name = socket.socket_name()
+        .expect("Failed to get socket name")
+        .to_string_lossy()
+        .to_string();
 
     let input_handler = match InputHandler::new() {
         Ok(handler) => {
@@ -230,7 +250,19 @@ fn run(config: Config) {
         frame_profiler: FrameProfiler::new(),
     };
     
-    if let Some(ref drm) = loop_data.drm_info {
+    loop_data.state.gpu_renderer = gpu_renderer;
+    
+    if let Some(ref gpu) = loop_data.state.gpu_renderer {
+        let (w, h) = gpu.size();
+        use state::OutputConfig;
+        let output_id = loop_data.state.add_output("GPU".to_string(), w as i32, h as i32);
+        loop_data.state.configure_output(output_id, OutputConfig {
+            make: Some("GPU".to_string()),
+            model: Some("OpenGL".to_string()),
+            ..Default::default()
+        });
+        log::info!("Configured GPU output at {}x{}", w, h);
+    } else if let Some(ref drm) = loop_data.drm_info {
         use state::OutputConfig;
         let output_id = loop_data.state.add_output(
             drm.name.clone(),
@@ -354,6 +386,139 @@ fn process_input(data: &mut LoopData) {
 }
 
 fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
+    if state.gpu_renderer.is_some() {
+        render_gpu(state, display);
+        return;
+    }
+    
+    render_cpu(state, display, drm_info);
+}
+
+fn render_gpu(state: &mut State, display: &mut Display<State>) {
+    if state.needs_relayout {
+        state.needs_relayout = false;
+        state.relayout_windows();
+        display.flush_clients().ok();
+    }
+    
+    let has_pending_screencopy = !state.screencopy_frames.is_empty();
+    let has_frame_callbacks = !state.frame_callbacks.is_empty();
+    let has_damage = state.damage_tracker.has_damage();
+    
+    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
+        return;
+    }
+    
+    let needs_render = has_damage || has_pending_screencopy;
+    
+    if needs_render {
+        let bg_dark = state.config.background_dark();
+        let title_focused = state.config.title_focused();
+        let title_unfocused = state.config.title_unfocused();
+        let title_bar_height = state.config.title_bar_height();
+        let focused_id = state.focused_window;
+        
+        let windows_to_render: Vec<_> = state.windows.iter()
+            .filter(|w| w.mapped && w.buffer.is_some())
+            .map(|w| (w.id, w.geometry, w.cache_width, w.cache_height))
+            .collect();
+        
+        for (id, _, _, _) in &windows_to_render {
+            state.update_window_pixel_cache(*id);
+        }
+        
+        let window_pixels: Vec<_> = windows_to_render.iter()
+            .filter_map(|(id, geom, cache_w, cache_h)| {
+                state.windows.iter().find(|w| w.id == *id).and_then(|win| {
+                    if !win.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 {
+                        Some((*id, *geom, *cache_w, *cache_h, win.pixel_cache.clone()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        
+        let gpu = state.gpu_renderer.as_mut().unwrap();
+        
+        gpu.begin_frame();
+        
+        let (width, height) = gpu.size();
+        let bg_color = [
+            ((bg_dark >> 16) & 0xFF) as f32 / 255.0,
+            ((bg_dark >> 8) & 0xFF) as f32 / 255.0,
+            (bg_dark & 0xFF) as f32 / 255.0,
+            1.0,
+        ];
+        gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
+        
+        for (id, geom, cache_w, cache_h, pixel_cache) in &window_pixels {
+            let is_focused = focused_id == Some(*id);
+            let title_color = if is_focused { title_focused } else { title_unfocused };
+            let title_rgba = [
+                ((title_color >> 16) & 0xFF) as f32 / 255.0,
+                ((title_color >> 8) & 0xFF) as f32 / 255.0,
+                (title_color & 0xFF) as f32 / 255.0,
+                1.0,
+            ];
+            
+            gpu.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
+            
+            let data: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    pixel_cache.as_ptr() as *const u8,
+                    pixel_cache.len() * 4,
+                )
+            };
+            
+            let texture = gpu.upload_shm_texture(
+                *id,
+                *cache_w as u32,
+                *cache_h as u32,
+                data,
+            );
+            
+            let content_y = geom.y + title_bar_height;
+            gpu.draw_texture(
+                texture,
+                geom.x,
+                content_y,
+                *cache_w as i32,
+                *cache_h as i32,
+            );
+        }
+        
+        gpu.end_frame();
+        
+        for (id, _, _, _) in &windows_to_render {
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
+                win.needs_redraw = false;
+                if let Some(ref buffer) = win.buffer {
+                    buffer.release();
+                }
+            }
+        }
+        
+        if has_damage {
+            state.damage_tracker.clear();
+        }
+    }
+    
+    if has_damage || has_frame_callbacks {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u32;
+        
+        for callback in state.frame_callbacks.drain(..) {
+            callback.done(time);
+        }
+        
+        display.flush_clients().ok();
+    }
+}
+
+fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
     use std::time::Instant;
     
     if state.needs_relayout {

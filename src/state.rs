@@ -604,6 +604,7 @@ pub struct State {
     pub outputs: Vec<Output>,
     pub next_output_id: OutputId,
     pub canvas: Canvas,
+    pub gpu_renderer: Option<crate::renderer::GpuRenderer>,
 
     pub shm_pools: HashMap<ObjectId, ShmPoolData>,
     pub buffers: HashMap<ObjectId, BufferData>,
@@ -694,6 +695,7 @@ impl State {
             outputs: Vec::new(),
             next_output_id: 1,
             canvas: Canvas::new(default_width, default_height, bg_color),
+            gpu_renderer: None,
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
