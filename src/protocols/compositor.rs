@@ -118,13 +118,33 @@ impl Dispatch<WlSurface, ()> for State {
             }
             wl_surface::Request::Destroy => {
                 let surface_id = resource.id();
+                log::info!("[surface] Destroy request for surface {:?}", surface_id);
                 if let Some(pos) = state.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
                     let window_id = state.windows[pos].id;
+                    log::info!("[surface] Found window {} for surface, removing", window_id);
                     state.remove_window(window_id);
                     state.relayout_windows();
+                } else {
+                    log::debug!("[surface] No window found for surface {:?}", surface_id);
                 }
             }
             _ => {}
+        }
+    }
+    
+    fn destroyed(
+        state: &mut Self,
+        _client: wayland_server::backend::ClientId,
+        resource: &WlSurface,
+        _data: &(),
+    ) {
+        let surface_id = resource.id();
+        log::info!("[surface] Surface {:?} destroyed (client disconnected or resource dropped)", surface_id);
+        if let Some(pos) = state.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
+            let window_id = state.windows[pos].id;
+            log::info!("[surface] Found window {} for destroyed surface, removing", window_id);
+            state.remove_window(window_id);
+            state.relayout_windows();
         }
     }
 }

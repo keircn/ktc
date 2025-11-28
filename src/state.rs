@@ -914,6 +914,9 @@ impl State {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
+        log::info!("[window] Adding window {} (existing: {:?})", 
+            id, self.windows.iter().map(|w| w.id).collect::<Vec<_>>());
+        
         let (screen_width, screen_height) = self.screen_size();
         let num_windows = self.windows.len() + 1;
         let geometry = calculate_tiling_geometry(num_windows - 1, num_windows, screen_width, screen_height);
@@ -942,6 +945,8 @@ impl State {
     
     pub fn relayout_windows(&mut self) {
         let num_windows = self.windows.len();
+        log::debug!("[relayout] Starting relayout for {} windows: {:?}", 
+            num_windows, self.windows.iter().map(|w| w.id).collect::<Vec<_>>());
         if num_windows == 0 {
             return;
         }
@@ -1021,10 +1026,15 @@ impl State {
     }
     
     pub fn remove_window(&mut self, id: WindowId) {
+        log::info!("[window] Removing window {} (total before: {})", id, self.windows.len());
         if let Some(pos) = self.windows.iter().position(|w| w.id == id) {
             let geometry = self.windows[pos].geometry;
             self.damage_tracker.add_damage(geometry);
             self.windows.swap_remove(pos);
+            log::info!("[window] Window {} removed, remaining: {:?}", 
+                id, self.windows.iter().map(|w| w.id).collect::<Vec<_>>());
+        } else {
+            log::warn!("[window] Window {} not found for removal!", id);
         }
         self.keyboard_to_window.retain(|_, window_id| *window_id != id);
         
