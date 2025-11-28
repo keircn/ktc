@@ -523,17 +523,24 @@ fn render_frame(
                 if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
                         let is_focused = focused_id == Some(*id);
+                        let render_width = (win.cache_width as i32).min(win.geometry.width);
+                        let render_height = (win.cache_height as i32).min(win.geometry.height - TITLE_BAR_HEIGHT);
+                        
+                        if render_width <= 0 || render_height <= 0 {
+                            continue;
+                        }
+                        
                         loop_data.state.canvas.draw_decorations(
                             win.geometry.x, win.geometry.y, 
-                            win.cache_width as i32, win.cache_height as i32,
+                            render_width, render_height,
                             TITLE_BAR_HEIGHT, is_focused
                         );
                         
                         let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
                         loop_data.state.canvas.blit_fast(
                             &win.pixel_cache, 
-                            win.cache_width, 
-                            win.cache_height, 
+                            render_width as usize, 
+                            render_height as usize, 
                             win.cache_stride, 
                             win.geometry.x, 
                             content_y
@@ -730,17 +737,24 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                 if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
                         let is_focused = focused_id == Some(*id);
+                        let render_width = (win.cache_width as i32).min(win.geometry.width);
+                        let render_height = (win.cache_height as i32).min(win.geometry.height - TITLE_BAR_HEIGHT);
+                        
+                        if render_width <= 0 || render_height <= 0 {
+                            continue;
+                        }
+                        
                         state.canvas.draw_decorations(
                             win.geometry.x, win.geometry.y,
-                            win.cache_width as i32, win.cache_height as i32,
+                            render_width, render_height,
                             TITLE_BAR_HEIGHT, is_focused
                         );
                         
                         let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
                         state.canvas.blit_fast(
                             &win.pixel_cache,
-                            win.cache_width,
-                            win.cache_height,
+                            render_width as usize,
+                            render_height as usize,
                             win.cache_stride,
                             win.geometry.x,
                             content_y

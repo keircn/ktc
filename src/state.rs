@@ -957,8 +957,15 @@ impl State {
             let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
             log::debug!("[relayout] Window {} (idx {}) geometry: {:?}", window.id, i, new_geometry);
             if window.geometry != new_geometry {
+                let old_geom = window.geometry;
                 window.geometry = new_geometry;
                 window.needs_redraw = true;
+                
+                if old_geom.width != new_geometry.width || old_geom.height != new_geometry.height {
+                    window.cache_width = 0;
+                    window.cache_height = 0;
+                    log::debug!("[relayout] Window {} cache invalidated due to size change", window.id);
+                }
             }
         }
         
