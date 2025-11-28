@@ -6,7 +6,10 @@ use std::sync::Mutex;
 use chrono::Local;
 
 pub struct FileLogger {
-    log_file: Mutex<File>,
+    error_file: Mutex<File>,
+    warn_file: Mutex<File>,
+    info_file: Mutex<File>,
+    debug_file: Mutex<File>,
 }
 
 impl FileLogger {
@@ -15,27 +18,39 @@ impl FileLogger {
         fs::create_dir_all(&log_dir)?;
         
         let session_num = Self::get_next_session_number(&log_dir);
-        let log_path = log_dir.join(format!("session-{}.log", session_num));
         
-        let log_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&log_path)?;
+        let error_file = Self::open_log_file(&log_dir, session_num, "err")?;
+        let warn_file = Self::open_log_file(&log_dir, session_num, "war")?;
+        let info_file = Self::open_log_file(&log_dir, session_num, "inf")?;
+        let debug_file = Self::open_log_file(&log_dir, session_num, "dbg")?;
         
         let logger = FileLogger {
-            log_file: Mutex::new(log_file),
+            error_file: Mutex::new(error_file),
+            warn_file: Mutex::new(warn_file),
+            info_file: Mutex::new(info_file),
+            debug_file: Mutex::new(debug_file),
         };
         
         log::set_max_level(LevelFilter::Debug);
         log::set_logger(Box::leak(Box::new(logger)))
             .map_err(|e| format!("Failed to set logger: {}", e))?;
         
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         log::info!("=== KTC Session {} ===", session_num);
-        log::info!("Log file: {}", log_path.display());
-        log::info!("Started at: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
+        log::info!("Log directory: {}", log_dir.display());
+        log::info!("Started at: {}", timestamp);
         
         Ok(())
+    }
+    
+    fn open_log_file(log_dir: &PathBuf, session_num: u32, suffix: &str) -> Result<File, Box<dyn std::error::Error>> {
+        let path = log_dir.join(format!("session-{}.{}.log", session_num, suffix));
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        Ok(file)
     }
     
     fn determine_log_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -74,8 +89,8 @@ impl FileLogger {
                 let name_str = name.to_string_lossy();
                 
                 if let Some(rest) = name_str.strip_prefix("session-") {
-                    if let Some(num_str) = rest.strip_suffix(".log") {
-                        if let Ok(num) = num_str.parse::<u32>() {
+                    if let Some(num_part) = rest.split('.').next() {
+                        if let Ok(num) = num_part.parse::<u32>() {
                             max_num = max_num.max(num);
                         }
                     }
@@ -84,6 +99,15 @@ impl FileLogger {
         }
         
         max_num + 1
+    }
+    
+    fn get_file_for_level(&self, level: Level) -> &Mutex<File> {
+        match level {
+            Level::Error => &self.error_file,
+            Level::Warn => &self.warn_file,
+            Level::Info => &self.info_file,
+            Level::Debug | Level::Trace => &self.debug_file,
+        }
     }
 }
 
@@ -107,22 +131,25 @@ impl log::Log for FileLogger {
         };
         
         let log_line = format!(
-            "{} {} {} {}\n",
+            "{} {} {}\n",
             timestamp,
-            level_char,
             record.target(),
             record.args()
         );
         
-        if let Ok(mut file) = self.log_file.lock() {
+        let file_mutex = self.get_file_for_level(record.level());
+        if let Ok(mut file) = file_mutex.lock() {
             let _ = file.write_all(log_line.as_bytes());
             let _ = file.flush();
         }
         
-        eprint!("{}", log_line);
+        eprint!("{} {} {}", timestamp, level_char, log_line);
     }
     
     fn flush(&self) {
-        let _ = self.log_file.lock().map(|mut f| f.flush());
+        let _ = self.error_file.lock().map(|mut f| f.flush());
+        let _ = self.warn_file.lock().map(|mut f| f.flush());
+        let _ = self.info_file.lock().map(|mut f| f.flush());
+        let _ = self.debug_file.lock().map(|mut f| f.flush());
     }
 }
