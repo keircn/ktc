@@ -699,10 +699,22 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             
             let focused_id = state.focused_window;
             
+            let total_windows = state.windows.len();
             let windows_to_render: Vec<_> = state.windows.iter()
                 .filter(|w| w.mapped && w.buffer.is_some())
                 .map(|w| w.id)
                 .collect();
+            
+            if windows_to_render.len() != total_windows && total_windows > 0 {
+                for w in &state.windows {
+                    if !w.mapped || w.buffer.is_none() {
+                        log::warn!(
+                            "[render] Window {} not rendered: mapped={} has_buffer={} cache={}x{}",
+                            w.id, w.mapped, w.buffer.is_some(), w.cache_width, w.cache_height
+                        );
+                    }
+                }
+            }
             
             let t1 = Instant::now();
             for id in &windows_to_render {
