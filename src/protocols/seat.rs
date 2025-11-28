@@ -48,6 +48,21 @@ impl Dispatch<WlSeat, ()> for State {
                     keyboard.repeat_info(25, 600);
                 }
                 
+                // Send keyboard.enter if there's a focused window belonging to this client
+                let enter_info = state.focused_window.and_then(|focused_id| {
+                    state.windows.iter()
+                        .find(|w| w.id == focused_id)
+                        .filter(|w| w.wl_surface.client() == keyboard.client())
+                        .map(|w| (focused_id, w.wl_surface.clone()))
+                });
+                
+                if let Some((focused_id, surface)) = enter_info {
+                    let serial = state.next_keyboard_serial();
+                    keyboard.enter(serial, &surface, vec![]);
+                    state.keyboard_to_window.insert(keyboard.id(), focused_id);
+                    log::info!("[seat] Sent keyboard.enter to newly created keyboard for focused window {}", focused_id);
+                }
+                
                 state.keyboards.push(keyboard);
             }
             wl_seat::Request::GetTouch { id } => {
