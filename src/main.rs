@@ -668,6 +668,8 @@ fn process_input_frame(data: &mut StandaloneLoopData) {
 }
 
 fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
+    use std::time::Instant;
+    
     if state.needs_relayout {
         state.needs_relayout = false;
         state.relayout_windows();
@@ -692,6 +694,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                 state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
             }
         } else {
+            let t0 = Instant::now();
             state.canvas.restore_cursor();
             
             let focused_id = state.focused_window;
@@ -701,12 +704,17 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                 .map(|w| w.id)
                 .collect();
             
+            let t1 = Instant::now();
             for id in &windows_to_render {
                 state.update_window_pixel_cache(*id);
             }
+            let cache_time = t1.elapsed().as_micros();
 
+            let t2 = Instant::now();
             state.canvas.clear_with_pattern();
+            let clear_time = t2.elapsed().as_micros();
             
+            let t3 = Instant::now();
             for id in &windows_to_render {
                 if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
@@ -729,6 +737,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                     }
                 }
             }
+            let blit_time = t3.elapsed().as_micros();
             
             for id in &windows_to_render {
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
@@ -741,6 +750,14 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             
             if state.cursor_visible {
                 state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
+            }
+            
+            let total = t0.elapsed().as_micros();
+            if total > 5000 {
+                log::debug!(
+                    "[render] total={}us cache={}us clear={}us blit={}us wins={}",
+                    total, cache_time, clear_time, blit_time, windows_to_render.len()
+                );
             }
         }
         
