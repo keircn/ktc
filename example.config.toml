@@ -61,18 +61,21 @@ theme = "default"
 size = 24
 
 [keybinds]
-# Modifier key: "alt", "super", "ctrl" - not yet implemented
+# Modifier key: "alt", "super", "ctrl"
 mod_key = "alt"
 
-# Focus next/previous window - not yet implemented
+# Exit compositor
+exit = "ctrl+alt+q"
+
+# Launch terminal (foot)
+launch_terminal = "mod+Return"
+
+# Focus next/previous window
 focus_next = "mod+j"
 focus_prev = "mod+k"
 
-# Close focused window - not yet implemented
+# Close focused window
 close_window = "mod+shift+q"
-
-# Exit compositor - not yet implemented
-exit = "ctrl+alt+q"
 
 [debug]
 # Show on-screen profiler overlay (FPS, frame time, memory usage)

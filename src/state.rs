@@ -1081,6 +1081,13 @@ impl State {
         self.damage_tracker.mark_full_damage();
     }
     
+    pub fn close_window(&mut self, id: WindowId) {
+        if let Some(window) = self.windows.iter().find(|w| w.id == id) {
+            window.xdg_toplevel.close();
+            log::info!("[window] Sent close request to window {}", id);
+        }
+    }
+    
     pub fn focus_next(&mut self) {
         if self.windows.is_empty() {
             return;

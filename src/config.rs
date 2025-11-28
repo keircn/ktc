@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 fn default_title_bar_height() -> i32 { 24 }
 fn default_border_width() -> i32 { 1 }
@@ -27,10 +28,16 @@ fn default_vsync() -> bool { true }
 fn default_vrr() -> bool { false }
 
 fn default_mod_key() -> String { "alt".to_string() }
-fn default_focus_next() -> String { "mod+j".to_string() }
-fn default_focus_prev() -> String { "mod+k".to_string() }
-fn default_close_window() -> String { "mod+shift+q".to_string() }
-fn default_exit() -> String { "ctrl+alt+q".to_string() }
+
+fn default_keybinds() -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("exit".to_string(), "ctrl+alt+q".to_string());
+    m.insert("launch_terminal".to_string(), "mod+Return".to_string());
+    m.insert("focus_next".to_string(), "mod+j".to_string());
+    m.insert("focus_prev".to_string(), "mod+k".to_string());
+    m.insert("close_window".to_string(), "mod+shift+q".to_string());
+    m
+}
 
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(default)]
@@ -161,18 +168,157 @@ pub struct CursorConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
-#[allow(dead_code)]
 pub struct KeybindsConfig {
     #[serde(default = "default_mod_key")]
     pub mod_key: String,
-    #[serde(default = "default_focus_next")]
-    pub focus_next: String,
-    #[serde(default = "default_focus_prev")]
-    pub focus_prev: String,
-    #[serde(default = "default_close_window")]
-    pub close_window: String,
-    #[serde(default = "default_exit")]
-    pub exit: String,
+    
+    #[serde(flatten, default = "default_keybinds")]
+    pub bindings: HashMap<String, String>,
+}
+
+impl Default for KeybindsConfig {
+    fn default() -> Self {
+        Self {
+            mod_key: default_mod_key(),
+            bindings: default_keybinds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Keybind {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub super_key: bool,
+    pub keysym: u32,
+}
+
+impl KeybindsConfig {
+    pub fn parse_keybind(&self, bind_str: &str) -> Option<Keybind> {
+        let mut ctrl = false;
+        let mut alt = false;
+        let mut shift = false;
+        let mut super_key = false;
+        let mut key_part = "";
+        
+        for part in bind_str.split('+') {
+            let part = part.trim().to_lowercase();
+            match part.as_str() {
+                "ctrl" | "control" => ctrl = true,
+                "alt" => alt = true,
+                "shift" => shift = true,
+                "super" | "mod4" | "logo" => super_key = true,
+                "mod" => {
+                    match self.mod_key.to_lowercase().as_str() {
+                        "alt" => alt = true,
+                        "super" | "mod4" | "logo" => super_key = true,
+                        "ctrl" | "control" => ctrl = true,
+                        _ => alt = true,
+                    }
+                }
+                _ => key_part = Box::leak(part.into_boxed_str()),
+            }
+        }
+        
+        let keysym = keysym_from_name(key_part)?;
+        Some(Keybind { ctrl, alt, shift, super_key, keysym })
+    }
+    
+    #[allow(dead_code)]
+    pub fn get_binding(&self, action: &str) -> Option<Keybind> {
+        self.bindings.get(action).and_then(|s| self.parse_keybind(s))
+    }
+    
+    pub fn get_all_bindings(&self) -> Vec<(String, Keybind)> {
+        self.bindings.iter()
+            .filter_map(|(action, bind_str)| {
+                self.parse_keybind(bind_str).map(|kb| (action.clone(), kb))
+            })
+            .collect()
+    }
+}
+
+fn keysym_from_name(name: &str) -> Option<u32> {
+    use xkbcommon::xkb::keysyms::*;
+    
+    Some(match name.to_lowercase().as_str() {
+        "a" => KEY_a,
+        "b" => KEY_b,
+        "c" => KEY_c,
+        "d" => KEY_d,
+        "e" => KEY_e,
+        "f" => KEY_f,
+        "g" => KEY_g,
+        "h" => KEY_h,
+        "i" => KEY_i,
+        "j" => KEY_j,
+        "k" => KEY_k,
+        "l" => KEY_l,
+        "m" => KEY_m,
+        "n" => KEY_n,
+        "o" => KEY_o,
+        "p" => KEY_p,
+        "q" => KEY_q,
+        "r" => KEY_r,
+        "s" => KEY_s,
+        "t" => KEY_t,
+        "u" => KEY_u,
+        "v" => KEY_v,
+        "w" => KEY_w,
+        "x" => KEY_x,
+        "y" => KEY_y,
+        "z" => KEY_z,
+        "0" => KEY_0,
+        "1" => KEY_1,
+        "2" => KEY_2,
+        "3" => KEY_3,
+        "4" => KEY_4,
+        "5" => KEY_5,
+        "6" => KEY_6,
+        "7" => KEY_7,
+        "8" => KEY_8,
+        "9" => KEY_9,
+        "return" | "enter" => KEY_Return,
+        "escape" | "esc" => KEY_Escape,
+        "tab" => KEY_Tab,
+        "space" => KEY_space,
+        "backspace" => KEY_BackSpace,
+        "delete" => KEY_Delete,
+        "insert" => KEY_Insert,
+        "home" => KEY_Home,
+        "end" => KEY_End,
+        "pageup" | "page_up" => KEY_Page_Up,
+        "pagedown" | "page_down" => KEY_Page_Down,
+        "left" => KEY_Left,
+        "right" => KEY_Right,
+        "up" => KEY_Up,
+        "down" => KEY_Down,
+        "f1" => KEY_F1,
+        "f2" => KEY_F2,
+        "f3" => KEY_F3,
+        "f4" => KEY_F4,
+        "f5" => KEY_F5,
+        "f6" => KEY_F6,
+        "f7" => KEY_F7,
+        "f8" => KEY_F8,
+        "f9" => KEY_F9,
+        "f10" => KEY_F10,
+        "f11" => KEY_F11,
+        "f12" => KEY_F12,
+        "minus" | "-" => KEY_minus,
+        "equal" | "=" => KEY_equal,
+        "bracketleft" | "[" => KEY_bracketleft,
+        "bracketright" | "]" => KEY_bracketright,
+        "semicolon" | ";" => KEY_semicolon,
+        "apostrophe" | "'" => KEY_apostrophe,
+        "grave" | "`" => KEY_grave,
+        "backslash" | "\\" => KEY_backslash,
+        "comma" | "," => KEY_comma,
+        "period" | "." => KEY_period,
+        "slash" | "/" => KEY_slash,
+        _ => return None,
+    })
 }
 
 impl Default for AppearanceConfig {
@@ -208,18 +354,6 @@ impl Default for CursorConfig {
         Self {
             theme: default_cursor_theme(),
             size: default_cursor_size(),
-        }
-    }
-}
-
-impl Default for KeybindsConfig {
-    fn default() -> Self {
-        Self {
-            mod_key: default_mod_key(),
-            focus_next: default_focus_next(),
-            focus_prev: default_focus_prev(),
-            close_window: default_close_window(),
-            exit: default_exit(),
         }
     }
 }

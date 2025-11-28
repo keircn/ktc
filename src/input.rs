@@ -8,8 +8,10 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::Instant;
+use std::collections::HashMap;
 use xkbcommon::xkb;
-use xkbcommon::xkb::keysyms::{KEY_q, KEY_t, KEY_Tab, KEY_j, KEY_k};
+
+use crate::config::Keybind;
 
 struct Interface;
 
@@ -134,6 +136,7 @@ pub struct InputFrame {
     pub launch_terminal: bool,
     pub focus_next: bool,
     pub focus_prev: bool,
+    pub close_window: bool,
 }
 
 impl InputFrame {
@@ -149,6 +152,7 @@ impl InputFrame {
         self.launch_terminal = false;
         self.focus_next = false;
         self.focus_prev = false;
+        self.close_window = false;
     }
 
     pub fn has_events(&self) -> bool {
@@ -160,6 +164,7 @@ impl InputFrame {
             || self.launch_terminal
             || self.focus_next
             || self.focus_prev
+            || self.close_window
     }
 }
 
@@ -169,14 +174,17 @@ pub struct InputHandler {
     xkb_state: Option<xkb::State>,
     ctrl: bool,
     alt: bool,
+    shift: bool,
+    super_key: bool,
     frame: InputFrame,
     stats: InputStats,
     last_stats_log: Instant,
     frame_count: u64,
+    keybinds: HashMap<String, Keybind>,
 }
 
 impl InputHandler {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(keybinds: HashMap<String, Keybind>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut libinput = Libinput::new_with_udev(Interface);
         libinput.udev_assign_seat("seat0")
             .map_err(|_| "Failed to assign udev seat")?;
@@ -213,10 +221,13 @@ impl InputHandler {
             xkb_state: None,
             ctrl: false,
             alt: false,
+            shift: false,
+            super_key: false,
             frame: InputFrame::new(),
             stats: InputStats::default(),
             last_stats_log: Instant::now(),
             frame_count: 0,
+            keybinds,
         })
     }
     
@@ -361,22 +372,49 @@ impl InputHandler {
                 xkb::MOD_NAME_ALT,
                 xkb::STATE_MODS_EFFECTIVE,
             );
+            self.shift = xkb_state.mod_name_is_active(
+                xkb::MOD_NAME_SHIFT,
+                xkb::STATE_MODS_EFFECTIVE,
+            );
+            self.super_key = xkb_state.mod_name_is_active(
+                xkb::MOD_NAME_LOGO,
+                xkb::STATE_MODS_EFFECTIVE,
+            );
             
             if state == KeyState::Pressed {
-                let keysym = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode));
+                let keysym: u32 = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode)).into();
                 
-                if self.ctrl && self.alt && keysym == KEY_q.into() {
-                    self.frame.exit_compositor = true;
-                    return;
-                } else if self.alt && keysym == KEY_t.into() {
-                    self.frame.launch_terminal = true;
-                    return;
-                } else if self.alt && (keysym == KEY_Tab.into() || keysym == KEY_j.into()) {
-                    self.frame.focus_next = true;
-                    return;
-                } else if self.alt && keysym == KEY_k.into() {
-                    self.frame.focus_prev = true;
-                    return;
+                for (action, bind) in &self.keybinds {
+                    if bind.keysym == keysym
+                        && bind.ctrl == self.ctrl
+                        && bind.alt == self.alt
+                        && bind.shift == self.shift
+                        && bind.super_key == self.super_key
+                    {
+                        match action.as_str() {
+                            "exit" => {
+                                self.frame.exit_compositor = true;
+                                return;
+                            }
+                            "launch_terminal" => {
+                                self.frame.launch_terminal = true;
+                                return;
+                            }
+                            "focus_next" => {
+                                self.frame.focus_next = true;
+                                return;
+                            }
+                            "focus_prev" => {
+                                self.frame.focus_prev = true;
+                                return;
+                            }
+                            "close_window" => {
+                                self.frame.close_window = true;
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             

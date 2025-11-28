@@ -154,7 +154,15 @@ fn run(config: Config) {
         .to_string_lossy()
         .to_string();
 
-    let input_handler = match InputHandler::new() {
+    let keybinds: std::collections::HashMap<String, crate::config::Keybind> = config
+        .keybinds
+        .get_all_bindings()
+        .into_iter()
+        .collect();
+    
+    log::debug!("Configured keybinds: {:?}", keybinds);
+
+    let input_handler = match InputHandler::new(keybinds) {
         Ok(handler) => {
             log::info!("Input handler initialized");
             Some(handler)
@@ -409,6 +417,13 @@ fn process_input(data: &mut LoopData) {
     if frame.focus_prev {
         data.state.focus_prev();
         data.display.flush_clients().ok();
+    }
+    
+    if frame.close_window {
+        if let Some(focused_id) = data.state.focused_window {
+            data.state.close_window(focused_id);
+            data.display.flush_clients().ok();
+        }
     }
     
     if frame.pointer.has_motion {
