@@ -21,6 +21,11 @@ fn default_repeat_delay() -> i32 { 600 }
 fn default_cursor_theme() -> String { "default".to_string() }
 fn default_cursor_size() -> i32 { 24 }
 
+fn default_drm_device() -> String { "auto".to_string() }
+fn default_preferred_mode() -> String { "auto".to_string() }
+fn default_vsync() -> bool { true }
+fn default_vrr() -> bool { false }
+
 fn default_mod_key() -> String { "alt".to_string() }
 fn default_focus_next() -> String { "mod+j".to_string() }
 fn default_focus_prev() -> String { "mod+k".to_string() }
@@ -31,6 +36,7 @@ fn default_exit() -> String { "ctrl+alt+q".to_string() }
 #[serde(default)]
 pub struct Config {
     pub appearance: AppearanceConfig,
+    pub display: DisplayConfig,
     pub keyboard: KeyboardConfig,
     pub cursor: CursorConfig,
     pub keybinds: KeybindsConfig,
@@ -47,6 +53,63 @@ pub struct DebugConfig {
 impl Default for DebugConfig {
     fn default() -> Self {
         Self { profiler: false }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct DisplayConfig {
+    #[serde(default = "default_drm_device")]
+    pub device: String,
+    
+    #[serde(default = "default_preferred_mode")]
+    pub mode: String,
+    
+    #[serde(default = "default_vsync")]
+    pub vsync: bool,
+    
+    #[serde(default = "default_vrr")]
+    #[allow(dead_code)]
+    pub vrr: bool,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            device: default_drm_device(),
+            mode: default_preferred_mode(),
+            vsync: default_vsync(),
+            vrr: default_vrr(),
+        }
+    }
+}
+
+impl DisplayConfig {
+    pub fn drm_device_path(&self) -> Option<String> {
+        match self.device.as_str() {
+            "auto" | "" => None,
+            path => Some(path.to_string()),
+        }
+    }
+    
+    pub fn parse_mode(&self) -> Option<(u16, u16, Option<u32>)> {
+        if self.mode == "auto" || self.mode.is_empty() {
+            return None;
+        }
+        
+        let parts: Vec<&str> = self.mode.split('@').collect();
+        let resolution = parts.first()?;
+        let refresh = parts.get(1).and_then(|r| r.trim_end_matches("Hz").parse().ok());
+        
+        let dims: Vec<&str> = resolution.split('x').collect();
+        if dims.len() != 2 {
+            return None;
+        }
+        
+        let width: u16 = dims[0].parse().ok()?;
+        let height: u16 = dims[1].parse().ok()?;
+        
+        Some((width, height, refresh))
     }
 }
 

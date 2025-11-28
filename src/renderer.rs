@@ -130,6 +130,14 @@ pub struct DmaBufInfo {
 
 impl GpuRenderer {
     pub fn new(drm_device: std::fs::File) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_config(drm_device, None, true)
+    }
+    
+    pub fn new_with_config(
+        drm_device: std::fs::File,
+        preferred_mode: Option<(u16, u16, Option<u32>)>,
+        _vsync: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let gbm = GbmDevice::new(drm_device.try_clone()?)?;
         
         let egl = Rc::new(unsafe { 
@@ -149,8 +157,35 @@ impl GpuRenderer {
         
         let connector_handle = connector_info.handle();
         
-        let mode = *connector_info.modes().first()
-            .ok_or("No display mode available")?;
+        log::info!("[gpu] Available display modes:");
+        for m in connector_info.modes() {
+            let (w, h) = m.size();
+            log::info!("[gpu]   {}x{}@{}Hz", w, h, m.vrefresh());
+        }
+        
+        let mode = if let Some((pref_w, pref_h, pref_refresh)) = preferred_mode {
+            connector_info.modes().iter()
+                .find(|m| {
+                    let (w, h) = m.size();
+                    let matches_res = w == pref_w && h == pref_h;
+                    if let Some(refresh) = pref_refresh {
+                        matches_res && m.vrefresh() == refresh
+                    } else {
+                        matches_res
+                    }
+                })
+                .or_else(|| {
+                    log::warn!("[gpu] Preferred mode {}x{}{} not found, using default",
+                        pref_w, pref_h,
+                        pref_refresh.map(|r| format!("@{}Hz", r)).unwrap_or_default());
+                    connector_info.modes().first()
+                })
+                .copied()
+                .ok_or("No display mode available")?
+        } else {
+            *connector_info.modes().first()
+                .ok_or("No display mode available")?
+        };
         
         let (width, height) = mode.size();
         let width = width as u32;
@@ -160,7 +195,7 @@ impl GpuRenderer {
             .copied()
             .ok_or("No CRTC available")?;
         
-        log::info!("[gpu] Display mode: {}x{}", width, height);
+        log::info!("[gpu] Selected mode: {}x{}@{}Hz", width, height, mode.vrefresh());
         
         let gbm_ptr = gbm.as_raw() as *mut std::ffi::c_void;
         let display = unsafe {
@@ -365,12 +400,10 @@ impl GpuRenderer {
     }
     
     pub fn end_frame(&mut self) {
-        // Wait for previous flip to complete before swapping new buffer
         if self.flip_pending {
             self.wait_for_flip();
             self.flip_pending = false;
             
-            // Release previous buffer after flip completes
             unsafe {
                 let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
                 if let Some(old_fb) = self.current_fb.take() {
@@ -503,7 +536,7 @@ impl GpuRenderer {
             revents: 0,
         }];
         
-        let timeout_ms = 16; // ~1 frame at 60Hz
+        let timeout_ms = 16;
         
         unsafe {
             let ret = libc::poll(fds.as_mut_ptr(), 1, timeout_ms);

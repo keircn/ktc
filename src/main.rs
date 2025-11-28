@@ -87,17 +87,33 @@ fn run(config: Config) {
         }
     };
     
-    let drm_device = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/dri/card0")
-        .or_else(|_| OpenOptions::new().read(true).write(true).open("/dev/dri/card1"));
+    let drm_device = if let Some(path) = config.display.drm_device_path() {
+        log::info!("Using configured DRM device: {}", path);
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+    } else {
+        log::info!("Auto-detecting DRM device");
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/card0")
+            .or_else(|_| OpenOptions::new().read(true).write(true).open("/dev/dri/card1"))
+    };
+    
+    let preferred_mode = config.display.parse_mode();
+    let vsync_enabled = config.display.vsync;
 
     let (gpu_renderer, drm_info) = match drm_device {
         Ok(device) => {
             log::info!("Opened DRM device");
             
-            match renderer::GpuRenderer::new(device.try_clone().unwrap()) {
+            match renderer::GpuRenderer::new_with_config(
+                device.try_clone().unwrap(),
+                preferred_mode,
+                vsync_enabled,
+            ) {
                 Ok(gpu) => {
                     let (w, h) = gpu.size();
                     log::info!("GPU renderer initialized: {}x{}", w, h);

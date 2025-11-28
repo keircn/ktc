@@ -1,5 +1,20 @@
 # copy to ~/.config/ktc/config.toml
 
+[display]
+# DRM device path, or "auto" to detect automatically
+# Examples: "/dev/dri/card0", "/dev/dri/card1", "auto"
+device = "auto"
+
+# Display mode: "auto" for highest available, or "WIDTHxHEIGHT" or "WIDTHxHEIGHT@REFRESH"
+# Examples: "auto", "1920x1080", "2560x1440@144", "3840x2160@60"
+mode = "auto"
+
+# Enable vsync (recommended, prevents tearing)
+vsync = true
+
+# Enable variable refresh rate (VRR/FreeSync/G-Sync) if supported
+vrr = false
+
 [appearance]
 # Window title bar height in pixels
 title_bar_height = 24
