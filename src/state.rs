@@ -889,6 +889,7 @@ impl State {
             .unwrap_or((1920, 1080))
     }
     
+    #[allow(dead_code)]
     pub fn set_screen_size(&mut self, width: i32, height: i32) {
         if self.outputs.is_empty() {
             self.add_output("default".to_string(), width, height);

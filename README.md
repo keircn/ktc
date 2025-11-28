@@ -1,31 +1,44 @@
 # ktc - Keiran's Tiling Compositor
 
-A crappy Wayland compositor written in Rust for the sake of learning how wayland works.
+A minimal Wayland tiling compositor written in Rust for the sake of learning how Wayland works.
 
 ## Building & Running
 
 ```bash
-cargo run start --nested
+cargo build --release
 
-# In another terminal, test with clients (change wayland-1 to whatever is printed by ktc)
-WAYLAND_DISPLAY=wayland-1 gnome-control-center
-WAYLAND_DISPLAY=wayland-1 foot
+# Run from a TTY (not from within another compositor)
+# First, ensure you're in the video and input groups:
+sudo usermod -aG video,input $USER
+# Log out and back in, then from a TTY:
+./target/release/ktc
 ```
 
-The compositor creates a window showing connected clients. Successfully renders most native wayland applications with some success
+Once running, use `Alt+T` to launch a terminal (requires `foot` terminal).
+
+## Keybinds
+
+- `Ctrl+Alt+Q` - Exit compositor
+- `Alt+T` - Launch terminal (foot)
+- `Alt+Tab` / `Alt+J` - Focus next window
+- `Alt+K` - Focus previous window
+
+## Configuration
+
+Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 
 ## Dependencies
 
 - `wayland-server` - Wayland protocol server implementation
-- `wayland-protocols` - Standard Wayland protocols
+- `wayland-protocols` - Standard Wayland protocols (xdg-shell, wlr-screencopy)
 - `calloop` - Event loop for Wayland protocol dispatch
-- `winit` - Cross-platform window creation
-- `softbuffer` - Software rendering to window
-- `libc` - For mmap-ing shared memory buffers
+- `drm` / `gbm` - Direct Rendering Manager for display output
+- `input` - libinput for keyboard/mouse handling
+- `xkbcommon` - Keyboard layout handling
+- `libc` / `nix` - Low-level system interfaces
 
 ## Current Limitations
 
-- No window positioning/decoration
 - Software rendering only (no GPU acceleration)
-- SHM buffers only (no DMA-BUF/Vulkan support)
-
+- SHM buffers only (no DMA-BUF support)
+- Single output only

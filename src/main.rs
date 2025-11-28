@@ -5,7 +5,6 @@ mod logging;
 mod session;
 mod config;
 
-use clap::{Parser, Subcommand};
 use config::Config;
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
@@ -24,102 +23,22 @@ use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::Z
 use std::sync::Arc;
 use state::State;
 
-#[derive(Parser)]
-#[command(name = "ktc")]
-#[command(about = "KTC - Minimal Wayland Tiling Compositor", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    #[command(about = "Start the compositor session")]
-    Start {
-        #[arg(short, long, help = "Force nested mode (run inside existing compositor)")]
-        nested: bool,
-        
-        #[arg(short, long, help = "Force standalone mode (native DRM/KMS)")]
-        standalone: bool,
-    },
-}
-
 fn main() {
-    let cli = Cli::parse();
-    
-    match cli.command {
-        Some(Commands::Start { nested, standalone }) => {
-            if unsafe { libc::geteuid() } == 0 {
-                eprintln!("Error: KTC must not be run as root");
-                eprintln!("Add your user to the 'video' and 'input' groups instead:");
-                eprintln!("  sudo usermod -aG video,input $USER");
-                eprintln!("Then log out and back in.");
-                std::process::exit(1);
-            }
-            
-            logging::FileLogger::init().expect("Failed to initialize logging");
-            
-            let config = Config::load();
-            log::debug!("Config: {:?}", config);
-            
-            if nested && standalone {
-                eprintln!("Error: Cannot specify both --nested and --standalone");
-                std::process::exit(1);
-            }
-            
-            let is_nested = if nested {
-                true
-            } else if standalone {
-                false
-            } else {
-                std::env::var("WAYLAND_DISPLAY")
-                    .ok()
-                    .filter(|v| !v.is_empty())
-                    .is_some() 
-                    || std::env::var("DISPLAY")
-                        .ok()
-                        .filter(|v| !v.is_empty())
-                        .is_some()
-            };
-            
-            if is_nested {
-                log::info!("Running in nested mode (client of existing compositor)");
-                run_nested(config);
-            } else {
-                log::info!("Running in standalone mode (native compositor)");
-                run_standalone(config);
-            }
-        }
-        None => {
-            print_help();
-        }
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Error: KTC must not be run as root");
+        eprintln!("Add your user to the 'video' and 'input' groups instead:");
+        eprintln!("  sudo usermod -aG video,input $USER");
+        eprintln!("Then log out and back in.");
+        std::process::exit(1);
     }
-}
-
-fn print_help() {
-    println!("KTC - Minimal Wayland Tiling Compositor\n");
-    println!("USAGE:");
-    println!("    ktc start [OPTIONS]    Start the compositor session");
-    println!();
-    println!("OPTIONS:");
-    println!("    -n, --nested          Force nested mode (run inside existing compositor)");
-    println!("    -s, --standalone      Force standalone mode (native DRM/KMS)");
-    println!();
-    println!("EXAMPLES:");
-    println!("    ktc start             Auto-detect mode and start compositor");
-    println!("    ktc start --nested    Start in nested mode for testing");
-    println!("    ktc start             Start from TTY as native compositor (DO NOT use sudo)");
-    println!();
-    println!("SETUP (for standalone mode from TTY):");
-    println!("    sudo usermod -aG video $USER");
-    println!("    sudo usermod -aG input $USER");
-    println!("    Log out and back in for group changes to take effect");
-    println!();
-    println!("KEYBINDS:");
-    println!("    Ctrl+Alt+Q           Exit compositor");
-    println!("    Alt+T                Launch terminal (foot)");
-    println!("    Alt+Tab / Alt+J      Focus next window");
-    println!("    Alt+K                Focus previous window");
+    
+    logging::FileLogger::init().expect("Failed to initialize logging");
+    
+    let config = Config::load();
+    log::debug!("Config: {:?}", config);
+    
+    log::info!("Starting KTC compositor");
+    run(config);
 }
 
 fn setup_wayland() -> (Display<State>, ListeningSocket) {
@@ -144,129 +63,7 @@ fn setup_wayland() -> (Display<State>, ListeningSocket) {
     (display, socket)
 }
 
-fn run_nested(config: Config) {
-    use winit::event_loop::{EventLoop, ControlFlow};
-    use winit::event::{Event, WindowEvent};
-    use winit::window::Window;
-    use std::rc::Rc;
-
-    let (mut display, socket) = setup_wayland();
-
-    let winit_loop = EventLoop::new().expect("Failed to create winit event loop");
-    
-    let window_attrs = Window::default_attributes()
-        .with_title("KTC Compositor (Nested)")
-        .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
-    let window = Rc::new(winit_loop.create_window(window_attrs).expect("Failed to create window"));
-
-    let context = softbuffer::Context::new(window.clone()).expect("Failed to create softbuffer context");
-    let mut surface = softbuffer::Surface::new(&context, window.clone()).expect("Failed to create surface");
-
-    let mut calloop_loop = calloop::EventLoop::<NestedLoopData>::try_new()
-        .expect("Failed to create calloop event loop");
-
-    let poll_fd = display.backend().poll_fd().try_clone_to_owned()
-        .expect("Failed to clone poll fd");
-    
-    calloop_loop
-        .handle()
-        .insert_source(
-            calloop::generic::Generic::new(
-                &socket,
-                calloop::Interest::READ,
-                calloop::Mode::Level,
-            ),
-            |_, socket, data| {
-                if let Some(stream) = socket.accept().ok().flatten() {
-                    log::info!("New client connecting to Wayland socket");
-                    match data.display.handle().insert_client(stream, Arc::new(())) {
-                        Ok(client_id) => {
-                            log::info!("Client connected successfully: {:?}", client_id);
-                        }
-                        Err(e) => {
-                            log::error!("Failed to insert client: {}", e);
-                        }
-                    }
-                }
-                Ok(calloop::PostAction::Continue)
-            },
-        )
-        .expect("Failed to insert socket source");
-
-    calloop_loop
-        .handle()
-        .insert_source(
-            calloop::generic::Generic::new(
-                poll_fd,
-                calloop::Interest::READ,
-                calloop::Mode::Level,
-            ),
-            |_, _, data| {
-                data.display.dispatch_clients(&mut data.state).ok();
-                data.display.flush_clients().ok();
-                Ok(calloop::PostAction::Continue)
-            },
-        )
-        .expect("Failed to insert display source");
-
-    let mut loop_data = NestedLoopData { 
-        display,
-        state: State::new(config),
-    };
-    
-    let initial_size = window.inner_size();
-    loop_data.state.add_output(
-        "nested".to_string(),
-        initial_size.width as i32,
-        initial_size.height as i32
-    );
-
-    winit_loop.run(move |event, target| {
-        target.set_control_flow(ControlFlow::Poll);
-        
-        calloop_loop.dispatch(Some(std::time::Duration::from_millis(1)), &mut loop_data).ok();
-
-        match event {
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                target.exit();
-            }
-            Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                render_frame(&mut surface, &window, &mut loop_data);
-            }
-            Event::WindowEvent { event: WindowEvent::CursorMoved { position, .. }, .. } => {
-                loop_data.state.handle_pointer_motion(position.x, position.y);
-                loop_data.display.flush_clients().ok();
-            }
-            Event::WindowEvent { event: WindowEvent::MouseInput { state: button_state, button, .. }, .. } => {
-                let btn = match button {
-                    winit::event::MouseButton::Left => 0x110,
-                    winit::event::MouseButton::Right => 0x111,
-                    winit::event::MouseButton::Middle => 0x112,
-                    winit::event::MouseButton::Back => 0x113,
-                    winit::event::MouseButton::Forward => 0x114,
-                    winit::event::MouseButton::Other(n) => 0x110 + n as u32,
-                };
-                let pressed = button_state == winit::event::ElementState::Pressed;
-                loop_data.state.handle_pointer_button(btn, pressed);
-                loop_data.display.flush_clients().ok();
-            }
-            Event::WindowEvent { event: WindowEvent::MouseWheel { delta, .. }, .. } => {
-                let (h, v) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(h, v) => (h as f64 * 10.0, v as f64 * 10.0),
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
-                };
-                loop_data.state.handle_pointer_axis(h, -v);
-                loop_data.display.flush_clients().ok();
-            }
-            Event::AboutToWait => {
-                window.request_redraw();
-            }
-            _ => {}
-        }
-    }).expect("Event loop error");
-}
-
-fn run_standalone(config: Config) {
+fn run(config: Config) {
     use std::fs::OpenOptions;
     use input::InputHandler;
     
@@ -331,7 +128,7 @@ fn run_standalone(config: Config) {
         }
     };
 
-    let mut calloop_loop = calloop::EventLoop::<StandaloneLoopData>::try_new()
+    let mut calloop_loop = calloop::EventLoop::<LoopData>::try_new()
         .expect("Failed to create calloop event loop");
 
     let poll_fd = display.backend().poll_fd().try_clone_to_owned()
@@ -407,12 +204,12 @@ fn run_standalone(config: Config) {
                 let input_start = std::time::Instant::now();
                 if data.input_pending {
                     data.input_pending = false;
-                    process_input_frame(data);
+                    process_input(data);
                 }
                 let input_time = input_start.elapsed().as_micros() as u64;
                 
                 let render_start = std::time::Instant::now();
-                render_standalone(&mut data.state, &mut data.display, data.drm_info.as_mut());
+                render(&mut data.state, &mut data.display, data.drm_info.as_mut());
                 let render_time = render_start.elapsed().as_micros() as u64;
                 
                 let total_time = frame_start.elapsed().as_micros() as u64;
@@ -423,7 +220,7 @@ fn run_standalone(config: Config) {
         )
         .expect("Failed to insert timer");
 
-    let mut loop_data = StandaloneLoopData {
+    let mut loop_data = LoopData {
         display,
         state: State::new(config),
         drm_info,
@@ -454,7 +251,7 @@ fn run_standalone(config: Config) {
         loop_data.state.add_output("headless".to_string(), 1366, 768);
     }
 
-    log::info!("Compositor running in standalone mode. Press Ctrl+Alt+Q to exit.");
+    log::info!("Compositor running. Press Ctrl+Alt+Q to exit.");
     
     while session::is_running() {
         calloop_loop.dispatch(Some(std::time::Duration::from_millis(16)), &mut loop_data)
@@ -464,145 +261,7 @@ fn run_standalone(config: Config) {
     log::info!("Main loop exited, cleaning up...");
 }
 
-fn render_frame(
-    surface: &mut softbuffer::Surface<std::rc::Rc<winit::window::Window>, std::rc::Rc<winit::window::Window>>,
-    window: &winit::window::Window,
-    loop_data: &mut NestedLoopData
-) {
-    if loop_data.state.needs_relayout {
-        loop_data.state.needs_relayout = false;
-        loop_data.state.relayout_windows();
-        loop_data.display.flush_clients().ok();
-    }
-    
-    let (width, height) = {
-        let size = window.inner_size();
-        (size.width as usize, size.height as usize)
-    };
-    
-    if loop_data.state.canvas.width != width || loop_data.state.canvas.height != height {
-        let bg_color = loop_data.state.config.background_dark();
-        loop_data.state.canvas.resize(width, height, bg_color);
-        loop_data.state.damage_tracker.mark_full_damage();
-    }
-    if loop_data.state.screen_size() != (width as i32, height as i32) {
-        loop_data.state.set_screen_size(width as i32, height as i32);
-    }
-    
-    let has_pending_screencopy = !loop_data.state.screencopy_frames.is_empty();
-    let has_frame_callbacks = !loop_data.state.frame_callbacks.is_empty();
-    let has_damage = loop_data.state.damage_tracker.has_damage();
-    let cursor_only = loop_data.state.damage_tracker.is_cursor_only();
-    
-    if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
-        return;
-    }
-    
-    surface.resize(
-        std::num::NonZeroU32::new(width as u32).unwrap(),
-        std::num::NonZeroU32::new(height as u32).unwrap(),
-    ).ok();
-
-    if has_damage {
-        if cursor_only {
-            loop_data.state.canvas.restore_cursor();
-            if loop_data.state.cursor_visible {
-                loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
-            }
-        } else {
-            loop_data.state.canvas.restore_cursor();
-            
-            let focused_id = loop_data.state.focused_window;
-            
-            let windows_to_render: Vec<_> = loop_data.state.windows.iter()
-                .filter(|w| w.mapped && w.buffer.is_some())
-                .map(|w| w.id)
-                .collect();
-            
-            for id in &windows_to_render {
-                loop_data.state.update_window_pixel_cache(*id);
-            }
-
-            loop_data.state.canvas.clear_with_pattern(
-                loop_data.state.config.background_dark(),
-                loop_data.state.config.background_light()
-            );
-            
-            let title_focused = loop_data.state.config.title_focused();
-            let title_unfocused = loop_data.state.config.title_unfocused();
-            let border_focused = loop_data.state.config.border_focused();
-            let border_unfocused = loop_data.state.config.border_unfocused();
-            let title_bar_height = loop_data.state.config.title_bar_height();
-            
-            for id in &windows_to_render {
-                if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
-                    if win.cache_width > 0 && win.cache_height > 0 {
-                        let is_focused = focused_id == Some(*id);
-                        let render_width = (win.cache_width as i32).min(win.geometry.width);
-                        let render_height = (win.cache_height as i32).min(win.geometry.height - title_bar_height);
-                        
-                        if render_width <= 0 || render_height <= 0 {
-                            continue;
-                        }
-                        
-                        loop_data.state.canvas.draw_decorations(
-                            win.geometry.x, win.geometry.y, 
-                            render_width, render_height,
-                            title_bar_height, is_focused,
-                            title_focused, title_unfocused, border_focused, border_unfocused
-                        );
-                        
-                        let content_y = win.geometry.y + title_bar_height;
-                        loop_data.state.canvas.blit_fast(
-                            &win.pixel_cache, 
-                            render_width as usize, 
-                            render_height as usize, 
-                            win.cache_stride, 
-                            win.geometry.x, 
-                            content_y
-                        );
-                    }
-                }
-            }
-            
-            for id in &windows_to_render {
-                if let Some(win) = loop_data.state.windows.iter_mut().find(|w| w.id == *id) {
-                    win.needs_redraw = false;
-                    if let Some(ref buffer) = win.buffer {
-                        buffer.release();
-                    }
-                }
-            }
-            
-            if loop_data.state.cursor_visible {
-                loop_data.state.canvas.draw_cursor(loop_data.state.cursor_x, loop_data.state.cursor_y);
-            }
-        }
-        
-        loop_data.state.damage_tracker.clear();
-    }
-    
-    if has_pending_screencopy {
-        loop_data.state.process_screencopy_frames(true);
-    }
-    
-    let mut buffer = surface.buffer_mut().expect("Failed to get buffer");
-    buffer.copy_from_slice(loop_data.state.canvas.as_slice());
-    buffer.present().ok();
-    
-    let time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u32;
-        
-    for callback in loop_data.state.frame_callbacks.drain(..) {
-        callback.done(time);
-    }
-    
-    loop_data.display.flush_clients().ok();
-}
-
-fn process_input_frame(data: &mut StandaloneLoopData) {
+fn process_input(data: &mut LoopData) {
     let handler = match data.input_handler.as_mut() {
         Some(h) => h,
         None => return,
@@ -694,7 +353,7 @@ fn process_input_frame(data: &mut StandaloneLoopData) {
     data.display.flush_clients().ok();
 }
 
-fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
+fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
     use std::time::Instant;
     
     if state.needs_relayout {
@@ -871,12 +530,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
     }
 }
 
-struct NestedLoopData {
-    display: Display<State>,
-    state: State,
-}
-
-struct StandaloneLoopData {
+struct LoopData {
     display: Display<State>,
     state: State,
     drm_info: Option<DrmInfo>,
