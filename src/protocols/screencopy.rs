@@ -183,7 +183,7 @@ impl State {
     }
 
     fn copy_frame_to_buffer(&mut self, pending: &PendingScreencopy) -> bool {
-        let buffer_id = pending.buffer.id().protocol_id();
+        let buffer_id = pending.buffer.id();
         let buffer_data = match self.buffers.get(&buffer_id) {
             Some(data) => data.clone(),
             None => return false,

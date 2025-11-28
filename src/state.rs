@@ -595,8 +595,8 @@ pub struct State {
     pub next_output_id: OutputId,
     pub canvas: Canvas,
 
-    pub shm_pools: HashMap<u32, ShmPoolData>,
-    pub buffers: HashMap<u32, BufferData>,
+    pub shm_pools: HashMap<ObjectId, ShmPoolData>,
+    pub buffers: HashMap<ObjectId, BufferData>,
 
     pub frame_callbacks: Vec<WlCallback>,
 
@@ -648,7 +648,7 @@ pub struct ShmPoolData {
 
 #[derive(Clone)]
 pub struct BufferData {
-    pub pool_id: u32,
+    pub pool_id: ObjectId,
     pub offset: i32,
     pub width: i32,
     pub height: i32,
@@ -1177,14 +1177,14 @@ impl State {
     }
     
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
-        let id = pool.id().protocol_id();
+        let id = pool.id();
         self.shm_pools.insert(id, ShmPoolData { fd, size, mmap_ptr: None });
     }
     
     pub fn add_buffer(&mut self, buffer: &WlBuffer, pool: &WlShmPool, offset: i32, 
                       width: i32, height: i32, stride: i32, format: u32) {
-        let buffer_id = buffer.id().protocol_id();
-        let pool_id = pool.id().protocol_id();
+        let buffer_id = buffer.id();
+        let pool_id = pool.id();
         self.buffers.insert(buffer_id, BufferData {
             pool_id,
             offset,
@@ -1196,9 +1196,9 @@ impl State {
     }
     
     pub fn get_buffer_pixels(&mut self, buffer: &WlBuffer) -> Option<(&[u32], usize)> {
-        let buffer_id = buffer.id().protocol_id();
+        let buffer_id = buffer.id();
         let buffer_data = self.buffers.get(&buffer_id)?;
-        let pool_id = buffer_data.pool_id;
+        let pool_id = buffer_data.pool_id.clone();
         let offset = buffer_data.offset;
         let height = buffer_data.height;
         let stride = buffer_data.stride;
@@ -1245,21 +1245,21 @@ impl State {
                 Some(b) => b,
                 None => return false,
             };
-            let buffer_id = buffer.id().protocol_id();
+            let buffer_id = buffer.id();
             let buffer_data = match self.buffers.get(&buffer_id) {
                 Some(d) => d,
                 None => {
-                    log::warn!("[cache] Window {} buffer id={} not found in buffers map!", window_id, buffer_id);
+                    log::warn!("[cache] Window {} buffer id={:?} not found in buffers map!", window_id, buffer_id);
                     return false;
                 }
             };
             let expected_w = window.geometry.width;
             let expected_h = (window.geometry.height - TITLE_BAR_HEIGHT).max(1);
-            (buffer_id, buffer_data.pool_id, buffer_data.offset, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
+            (buffer_id, buffer_data.pool_id.clone(), buffer_data.offset, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
         };
         
         log::debug!(
-            "[cache] Window {} using buffer_id={} pool_id={} offset={} size={}x{}",
+            "[cache] Window {} using buffer_id={:?} pool_id={:?} offset={} size={}x{}",
             window_id, buffer_id, pool_id, buf_offset, buf_width, buf_height
         );
         
@@ -1268,7 +1268,7 @@ impl State {
         
         if buf_width < min_width || buf_height < min_height {
             log::warn!(
-                "[cache] Window {} rejecting buffer id={} size={}x{} (expected ~{}x{}, min {}x{})",
+                "[cache] Window {} rejecting buffer id={:?} size={}x{} (expected ~{}x{}, min {}x{})",
                 window_id, buffer_id, buf_width, buf_height, expected_width, expected_height, min_width, min_height
             );
             return false;
