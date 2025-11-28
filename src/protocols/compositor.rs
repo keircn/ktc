@@ -5,7 +5,7 @@ use wayland_server::protocol::{
     wl_callback::WlCallback,
     wl_region::{self, WlRegion},
 };
-use crate::state::{State, TITLE_BAR_HEIGHT};
+use crate::state::State;
 
 impl GlobalDispatch<WlCompositor, ()> for State {
     fn bind(
@@ -87,12 +87,13 @@ impl Dispatch<WlSurface, ()> for State {
                 state.frame_callbacks.push(cb);
             }
             wl_surface::Request::Damage { x, y, width, height } => {
+                let title_bar_height = state.title_bar_height();
                 let damage_info = state.get_window_by_surface(resource).map(|window| {
                     window.needs_redraw = true;
                     let g = window.geometry;
                     crate::state::Rectangle {
                         x: g.x + x,
-                        y: g.y + TITLE_BAR_HEIGHT + y,
+                        y: g.y + title_bar_height + y,
                         width,
                         height,
                     }
@@ -102,12 +103,13 @@ impl Dispatch<WlSurface, ()> for State {
                 }
             }
             wl_surface::Request::DamageBuffer { x, y, width, height } => {
+                let title_bar_height = state.title_bar_height();
                 let damage_info = state.get_window_by_surface(resource).map(|window| {
                     window.needs_redraw = true;
                     let g = window.geometry;
                     crate::state::Rectangle {
                         x: g.x + x,
-                        y: g.y + TITLE_BAR_HEIGHT + y,
+                        y: g.y + title_bar_height + y,
                         width,
                         height,
                     }

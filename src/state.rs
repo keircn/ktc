@@ -11,8 +11,6 @@ use crate::config::Config;
 pub type WindowId = u64;
 pub type OutputId = u64;
 
-pub const TITLE_BAR_HEIGHT: i32 = 24;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rectangle {
     pub x: i32,
@@ -210,9 +208,9 @@ impl Canvas {
     const CURSOR_W: usize = 16;
     const CURSOR_H: usize = 20;
     
-    pub fn new(width: usize, height: usize) -> Self {
+    pub fn new(width: usize, height: usize, bg_color: u32) -> Self {
         let stride = width;
-        let pixels = vec![0xFF1A1A2E; width * height];
+        let pixels = vec![bg_color; width * height];
         Self {
             pixels,
             cursor_save: vec![0; Self::CURSOR_W * Self::CURSOR_H],
@@ -224,12 +222,12 @@ impl Canvas {
         }
     }
 
-    pub fn resize(&mut self, width: usize, height: usize) {
+    pub fn resize(&mut self, width: usize, height: usize, bg_color: u32) {
         if self.width != width || self.height != height {
             self.width = width;
             self.height = height;
             self.stride = width;
-            self.pixels = vec![0xFF1A1A2E; width * height];
+            self.pixels = vec![bg_color; width * height];
             self.cursor_save_x = -100;
             self.cursor_save_y = -100;
         }
@@ -239,9 +237,7 @@ impl Canvas {
         self.pixels.fill(color);
     }
     
-    pub fn clear_with_pattern(&mut self) {
-        let bg_dark = 0xFF1A1A2E;
-        let bg_light = 0xFF16213E;
+    pub fn clear_with_pattern(&mut self, bg_dark: u32, bg_light: u32) {
         let tile_size = 32;
         
         let width = self.width;
@@ -409,9 +405,9 @@ impl Canvas {
         &mut self.pixels
     }
 
-    pub fn draw_decorations(&mut self, x: i32, y: i32, width: i32, height: i32, title_height: i32, is_focused: bool) {
-        let title_bg = if is_focused { 0xFF2D5A88 } else { 0xFF3C3C3C };
-        let border_color = if is_focused { 0xFF4A9EFF } else { 0xFF505050 };
+    pub fn draw_decorations(&mut self, x: i32, y: i32, width: i32, height: i32, title_height: i32, is_focused: bool, title_focused: u32, title_unfocused: u32, border_focused: u32, border_unfocused: u32) {
+        let title_bg = if is_focused { title_focused } else { title_unfocused };
+        let border_color = if is_focused { border_focused } else { border_unfocused };
         
         let x = x.max(0) as usize;
         let y = y.max(0) as usize;
@@ -679,6 +675,7 @@ impl State {
         let default_height = 1080;
         
         let keymap_data = Self::create_keymap(&config);
+        let bg_color = config.background_dark();
         
         Self {
             config,
@@ -687,7 +684,7 @@ impl State {
             next_window_id: 1,
             outputs: Vec::new(),
             next_output_id: 1,
-            canvas: Canvas::new(default_width, default_height),
+            canvas: Canvas::new(default_width, default_height, bg_color),
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
@@ -769,7 +766,8 @@ impl State {
         self.outputs.push(output);
         
         if self.outputs.len() == 1 {
-            self.canvas.resize(width as usize, height as usize);
+            let bg_color = self.config.background_dark();
+            self.canvas.resize(width as usize, height as usize, bg_color);
         }
         
         self.relayout_windows();
@@ -813,7 +811,8 @@ impl State {
         };
         
         if is_primary {
-            self.canvas.resize(new_width as usize, new_height as usize);
+            let bg_color = self.config.background_dark();
+            self.canvas.resize(new_width as usize, new_height as usize, bg_color);
         }
         
         self.send_output_configuration(id);
@@ -873,6 +872,10 @@ impl State {
         self.outputs.first()
     }
     
+    pub fn title_bar_height(&self) -> i32 {
+        self.config.title_bar_height()
+    }
+    
     pub fn screen_size(&self) -> (i32, i32) {
         self.primary_output()
             .map(|o| (o.width, o.height))
@@ -885,7 +888,8 @@ impl State {
         } else if let Some(output) = self.outputs.first_mut() {
             output.width = width;
             output.height = height;
-            self.canvas.resize(width as usize, height as usize);
+            let bg_color = self.config.background_dark();
+            self.canvas.resize(width as usize, height as usize, bg_color);
             let id = output.id;
             self.send_output_configuration(id);
         }
@@ -987,7 +991,8 @@ impl State {
             let states = self.get_toplevel_states(window_id);
             let serial = self.next_keyboard_serial();
             
-            let client_height = (geometry.height - TITLE_BAR_HEIGHT).max(1);
+            let title_bar_height = self.config.title_bar_height();
+            let client_height = (geometry.height - title_bar_height).max(1);
             xdg_toplevel.configure(geometry.width, client_height, states);
             xdg_surface.configure(serial);
         }
@@ -1261,7 +1266,8 @@ impl State {
                 }
             };
             let expected_w = window.geometry.width;
-            let expected_h = (window.geometry.height - TITLE_BAR_HEIGHT).max(1);
+            let title_bar_height = self.config.title_bar_height();
+            let expected_h = (window.geometry.height - title_bar_height).max(1);
             (buffer_id, buffer_data.pool_id.clone(), buffer_data.offset, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
         };
         
@@ -1372,14 +1378,15 @@ impl State {
     }
     
     pub fn window_at(&self, x: f64, y: f64) -> Option<WindowId> {
+        let title_bar_height = self.config.title_bar_height();
         for window in self.windows.iter().rev() {
             if !window.mapped {
                 continue;
             }
             let g = window.geometry;
-            let content_y = g.y + TITLE_BAR_HEIGHT;
+            let content_y = g.y + title_bar_height;
             if x >= g.x as f64 && x < (g.x + g.width) as f64 &&
-               y >= g.y as f64 && y < (content_y + g.height - TITLE_BAR_HEIGHT) as f64 {
+               y >= g.y as f64 && y < (content_y + g.height - title_bar_height) as f64 {
                 return Some(window.id);
             }
         }
@@ -1400,6 +1407,7 @@ impl State {
         }
         
         let window_id = self.window_at(x, y);
+        let title_bar_height = self.config.title_bar_height();
         
         if window_id != self.pointer_focus {
             let serial = self.next_pointer_serial();
@@ -1420,7 +1428,7 @@ impl State {
                     let new_client = new_window.wl_surface.client();
                     let g = new_window.geometry;
                     let local_x = x - g.x as f64;
-                    let local_y = y - (g.y + TITLE_BAR_HEIGHT) as f64;
+                    let local_y = y - (g.y + title_bar_height) as f64;
                     
                     for pointer in &self.pointers {
                         if pointer.client() == new_client {
@@ -1436,7 +1444,7 @@ impl State {
                 let client = window.wl_surface.client();
                 let g = window.geometry;
                 let local_x = x - g.x as f64;
-                let local_y = y - (g.y + TITLE_BAR_HEIGHT) as f64;
+                let local_y = y - (g.y + title_bar_height) as f64;
                 let time = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()

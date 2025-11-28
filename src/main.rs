@@ -22,7 +22,7 @@ use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use std::sync::Arc;
-use state::{State, TITLE_BAR_HEIGHT};
+use state::State;
 
 #[derive(Parser)]
 #[command(name = "ktc")]
@@ -481,7 +481,8 @@ fn render_frame(
     };
     
     if loop_data.state.canvas.width != width || loop_data.state.canvas.height != height {
-        loop_data.state.canvas.resize(width, height);
+        let bg_color = loop_data.state.config.background_dark();
+        loop_data.state.canvas.resize(width, height, bg_color);
         loop_data.state.damage_tracker.mark_full_damage();
     }
     if loop_data.state.screen_size() != (width as i32, height as i32) {
@@ -522,14 +523,23 @@ fn render_frame(
                 loop_data.state.update_window_pixel_cache(*id);
             }
 
-            loop_data.state.canvas.clear_with_pattern();
+            loop_data.state.canvas.clear_with_pattern(
+                loop_data.state.config.background_dark(),
+                loop_data.state.config.background_light()
+            );
+            
+            let title_focused = loop_data.state.config.title_focused();
+            let title_unfocused = loop_data.state.config.title_unfocused();
+            let border_focused = loop_data.state.config.border_focused();
+            let border_unfocused = loop_data.state.config.border_unfocused();
+            let title_bar_height = loop_data.state.config.title_bar_height();
             
             for id in &windows_to_render {
                 if let Some(win) = loop_data.state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
                         let is_focused = focused_id == Some(*id);
                         let render_width = (win.cache_width as i32).min(win.geometry.width);
-                        let render_height = (win.cache_height as i32).min(win.geometry.height - TITLE_BAR_HEIGHT);
+                        let render_height = (win.cache_height as i32).min(win.geometry.height - title_bar_height);
                         
                         if render_width <= 0 || render_height <= 0 {
                             continue;
@@ -538,10 +548,11 @@ fn render_frame(
                         loop_data.state.canvas.draw_decorations(
                             win.geometry.x, win.geometry.y, 
                             render_width, render_height,
-                            TITLE_BAR_HEIGHT, is_focused
+                            title_bar_height, is_focused,
+                            title_focused, title_unfocused, border_focused, border_unfocused
                         );
                         
-                        let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
+                        let content_y = win.geometry.y + title_bar_height;
                         loop_data.state.canvas.blit_fast(
                             &win.pixel_cache, 
                             render_width as usize, 
@@ -738,8 +749,17 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
             let cache_time = t1.elapsed().as_micros();
 
             let t2 = Instant::now();
-            state.canvas.clear_with_pattern();
+            state.canvas.clear_with_pattern(
+                state.config.background_dark(),
+                state.config.background_light()
+            );
             let clear_time = t2.elapsed().as_micros();
+            
+            let title_focused = state.config.title_focused();
+            let title_unfocused = state.config.title_unfocused();
+            let border_focused = state.config.border_focused();
+            let border_unfocused = state.config.border_unfocused();
+            let title_bar_height = state.config.title_bar_height();
             
             let t3 = Instant::now();
             for id in &windows_to_render {
@@ -747,7 +767,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                     if win.cache_width > 0 && win.cache_height > 0 {
                         let is_focused = focused_id == Some(*id);
                         let render_width = (win.cache_width as i32).min(win.geometry.width);
-                        let render_height = (win.cache_height as i32).min(win.geometry.height - TITLE_BAR_HEIGHT);
+                        let render_height = (win.cache_height as i32).min(win.geometry.height - title_bar_height);
                         
                         if render_width <= 0 || render_height <= 0 {
                             continue;
@@ -755,7 +775,7 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                         
                         log::debug!(
                             "[blit] Window {} at ({},{}) size {}x{} cache_ptr={:p} cache_len={} stride={}",
-                            win.id, win.geometry.x, win.geometry.y + TITLE_BAR_HEIGHT,
+                            win.id, win.geometry.x, win.geometry.y + title_bar_height,
                             render_width, render_height,
                             win.pixel_cache.as_ptr(), win.pixel_cache.len(), win.cache_stride
                         );
@@ -763,10 +783,11 @@ fn render_standalone(state: &mut State, display: &mut Display<State>, drm_info: 
                         state.canvas.draw_decorations(
                             win.geometry.x, win.geometry.y,
                             render_width, render_height,
-                            TITLE_BAR_HEIGHT, is_focused
+                            title_bar_height, is_focused,
+                            title_focused, title_unfocused, border_focused, border_unfocused
                         );
                         
-                        let content_y = win.geometry.y + TITLE_BAR_HEIGHT;
+                        let content_y = win.geometry.y + title_bar_height;
                         state.canvas.blit_fast(
                             &win.pixel_cache,
                             render_width as usize,
