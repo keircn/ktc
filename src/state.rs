@@ -1129,6 +1129,22 @@ impl State {
             self.damage_tracker.add_damage(new_win.geometry);
         }
         
+        // Send leave to old focused window's keyboards
+        if let Some(old_id) = old_focused {
+            if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
+                let old_surface = old_window.wl_surface.clone();
+                let old_client = old_window.wl_surface.client();
+                let serial = self.next_keyboard_serial();
+                
+                for keyboard in self.keyboards.iter() {
+                    if keyboard.client() == old_client {
+                        keyboard.leave(serial, &old_surface);
+                    }
+                }
+            }
+        }
+        
+        // Send enter to new focused window's keyboards
         let new_window_info = self.windows.iter()
             .find(|w| w.id == window_id)
             .map(|w| (w.wl_surface.clone(), w.wl_surface.client()));
@@ -1136,24 +1152,10 @@ impl State {
         if let Some((surface, Some(new_client))) = new_window_info {
             let serial = self.next_keyboard_serial();
             for keyboard in self.keyboards.iter() {
-                let kb_client = keyboard.client();
-                if kb_client.as_ref() != Some(&new_client) {
-                    continue;
+                if keyboard.client().as_ref() == Some(&new_client) {
+                    keyboard.enter(serial, &surface, vec![]);
+                    self.keyboard_to_window.insert(keyboard.id(), window_id);
                 }
-                
-                let kb_id = keyboard.id();
-                if let Some(old_id) = old_focused {
-                    if self.keyboard_to_window.get(&kb_id) == Some(&old_id) {
-                        if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
-                            if old_window.wl_surface.client().as_ref() == Some(&new_client) {
-                                keyboard.leave(serial, &old_window.wl_surface);
-                            }
-                        }
-                    }
-                }
-                
-                keyboard.enter(serial, &surface, vec![]);
-                self.keyboard_to_window.insert(kb_id, window_id);
             }
         }
     }
