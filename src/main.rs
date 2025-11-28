@@ -59,7 +59,7 @@ fn setup_wayland(has_gpu: bool) -> (Display<State>, ListeningSocket) {
     dh.create_global::<State, ZwlrScreencopyManagerV1, _>(3, ());
     
     if has_gpu {
-        dh.create_global::<State, ZwpLinuxDmabufV1, _>(4, DmaBufGlobal);
+        dh.create_global::<State, ZwpLinuxDmabufV1, _>(3, DmaBufGlobal);
         log::info!("DMA-BUF protocol enabled (GPU acceleration available)");
     }
 
