@@ -637,9 +637,10 @@ pub struct ProfilerStats {
 }
 
 const FONT_DATA: &[u8] = include_bytes!("font5x7.raw");
-const FONT_CHAR_WIDTH: u32 = 5;
-const FONT_CHAR_HEIGHT: u32 = 7;
-const FONT_CHARS_PER_ROW: u32 = 16;
+const FONT_CHAR_WIDTH: usize = 5;
+const FONT_CHAR_HEIGHT: usize = 7;
+const FONT_CHARS_PER_ROW: usize = 16;
+const PROFILER_TEXTURE_ID: u64 = u64::MAX - 1;
 
 impl GpuRenderer {
     pub fn draw_profiler(&mut self, stats: &ProfilerStats) {
@@ -653,40 +654,43 @@ impl GpuRenderer {
             format!("Textures: {}", stats.texture_count),
         ];
         
-        let scale = 2;
-        let char_w = (FONT_CHAR_WIDTH * scale) as i32;
-        let char_h = (FONT_CHAR_HEIGHT * scale) as i32;
+        let scale: usize = 2;
+        let char_w = FONT_CHAR_WIDTH * scale;
+        let char_h = FONT_CHAR_HEIGHT * scale;
         let line_height = char_h + 2;
-        let padding = 8;
+        let padding: usize = 8;
         
-        let max_chars = lines.iter().map(|l| l.len()).max().unwrap_or(0) as i32;
+        let max_chars = lines.iter().map(|l| l.len()).max().unwrap_or(0);
         let box_width = max_chars * char_w + padding * 2;
-        let box_height = (lines.len() as i32) * line_height + padding * 2;
+        let box_height = lines.len() * line_height + padding * 2;
+        let mut pixels = vec![0u8; box_width * box_height * 4];
         
-        let box_x = self.width as i32 - box_width - 10;
+        for i in 0..(box_width * box_height) {
+            pixels[i * 4 + 0] = 0;
+            pixels[i * 4 + 1] = 0;
+            pixels[i * 4 + 2] = 0;
+            pixels[i * 4 + 3] = 180;
+        }
+        
+        for (line_idx, line) in lines.iter().enumerate() {
+            let text_y = padding + line_idx * line_height;
+            for (char_idx, ch) in line.chars().enumerate() {
+                let text_x = padding + char_idx * char_w;
+                Self::draw_char_to_buffer(&mut pixels, box_width, text_x, text_y, ch, scale);
+            }
+        }
+        
+        let texture = self.upload_profiler_texture(box_width as u32, box_height as u32, &pixels);
+        
+        let box_x = self.width as i32 - box_width as i32 - 10;
         let box_y = 10;
         
-        self.draw_rect(box_x, box_y, box_width, box_height, [0.0, 0.0, 0.0, 0.7]);
-        
-        for (i, line) in lines.iter().enumerate() {
-            let text_x = box_x + padding;
-            let text_y = box_y + padding + (i as i32) * line_height;
-            self.draw_text(line, text_x, text_y, scale);
-        }
+        self.draw_texture(texture, box_x, box_y, box_width as i32, box_height as i32);
     }
     
-    fn draw_text(&mut self, text: &str, x: i32, y: i32, scale: u32) {
-        let char_w = FONT_CHAR_WIDTH * scale;
-        
-        for (i, ch) in text.chars().enumerate() {
-            let char_x = x + (i as i32) * (char_w as i32);
-            self.draw_char(ch, char_x, y, scale);
-        }
-    }
-    
-    fn draw_char(&mut self, ch: char, x: i32, y: i32, scale: u32) {
+    fn draw_char_to_buffer(pixels: &mut [u8], stride: usize, x: usize, y: usize, ch: char, scale: usize) {
         let idx = if ch.is_ascii() && ch >= ' ' {
-            (ch as u32) - 32
+            (ch as usize) - 32
         } else {
             0
         };
@@ -698,14 +702,56 @@ impl GpuRenderer {
             for cx in 0..FONT_CHAR_WIDTH {
                 let px = font_x + cx;
                 let py = font_y + cy;
-                let byte_idx = (py * (FONT_CHARS_PER_ROW * FONT_CHAR_WIDTH) + px) as usize;
+                let byte_idx = py * (FONT_CHARS_PER_ROW * FONT_CHAR_WIDTH) + px;
                 
                 if byte_idx < FONT_DATA.len() && FONT_DATA[byte_idx] > 127 {
-                    let screen_x = x + (cx * scale) as i32;
-                    let screen_y = y + (cy * scale) as i32;
-                    self.draw_rect(screen_x, screen_y, scale as i32, scale as i32, [1.0, 1.0, 1.0, 1.0]);
+                    for sy in 0..scale {
+                        for sx in 0..scale {
+                            let screen_x = x + cx * scale + sx;
+                            let screen_y = y + cy * scale + sy;
+                            let pixel_idx = (screen_y * stride + screen_x) * 4;
+                            if pixel_idx + 3 < pixels.len() {
+                                pixels[pixel_idx + 0] = 255;
+                                pixels[pixel_idx + 1] = 255;
+                                pixels[pixel_idx + 2] = 255;
+                                pixels[pixel_idx + 3] = 255;
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+    
+    fn upload_profiler_texture(&mut self, width: u32, height: u32, data: &[u8]) -> glow::Texture {
+        unsafe {
+            let texture = if let Some(&tex) = self.shm_textures.get(&PROFILER_TEXTURE_ID) {
+                tex
+            } else {
+                let tex = self.gl.create_texture().unwrap();
+                self.shm_textures.insert(PROFILER_TEXTURE_ID, tex);
+                tex
+            };
+            
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(data)),
+            );
+            
+            texture
         }
     }
     
