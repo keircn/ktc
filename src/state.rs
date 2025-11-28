@@ -1230,7 +1230,10 @@ impl State {
             let buffer_id = buffer.id().protocol_id();
             let buffer_data = match self.buffers.get(&buffer_id) {
                 Some(d) => d,
-                None => return false,
+                None => {
+                    log::warn!("[cache] Window {} buffer id={} not found in buffers map!", window_id, buffer_id);
+                    return false;
+                }
             };
             let expected_w = window.geometry.width;
             let expected_h = (window.geometry.height - TITLE_BAR_HEIGHT).max(1);
@@ -1241,9 +1244,9 @@ impl State {
         let min_height = (expected_height / 2).max(10) as usize;
         
         if buf_width < min_width || buf_height < min_height {
-            log::debug!(
-                "[cache] Window {} rejecting buffer {}x{} (expected ~{}x{}, min {}x{})",
-                window_id, buf_width, buf_height, expected_width, expected_height, min_width, min_height
+            log::warn!(
+                "[cache] Window {} rejecting buffer id={} size={}x{} (expected ~{}x{}, min {}x{})",
+                window_id, buffer_id, buf_width, buf_height, expected_width, expected_height, min_width, min_height
             );
             return false;
         }

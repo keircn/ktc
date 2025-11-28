@@ -82,6 +82,7 @@ impl Dispatch<WlShmPool, ()> for State {
         match request {
             wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } => {
                 let buffer = data_init.init(id, ());
+                log::debug!("[buffer] CreateBuffer: {}x{} stride={} offset={}", width, height, stride, offset);
                 state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
             }
             _ => {}
