@@ -591,6 +591,17 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         }
     }
     
+    if has_frame_callbacks {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u32;
+        
+        for callback in state.frame_callbacks.drain(..) {
+            callback.done(time);
+        }
+    }
+    
     display.flush_clients().ok();
 }
 
