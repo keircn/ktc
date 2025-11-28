@@ -776,7 +776,7 @@ impl GpuRenderer {
         let mut pixels = vec![0u8; box_width * box_height * 4];
         
         for i in 0..(box_width * box_height) {
-            pixels[i * 4 + 0] = 0;
+            pixels[i * 4] = 0;
             pixels[i * 4 + 1] = 0;
             pixels[i * 4 + 2] = 0;
             pixels[i * 4 + 3] = 180;
@@ -821,7 +821,7 @@ impl GpuRenderer {
                             let screen_y = y + cy * scale + sy;
                             let pixel_idx = (screen_y * stride + screen_x) * 4;
                             if pixel_idx + 3 < pixels.len() {
-                                pixels[pixel_idx + 0] = 255;
+                                pixels[pixel_idx] = 255;
                                 pixels[pixel_idx + 1] = 255;
                                 pixels[pixel_idx + 2] = 255;
                                 pixels[pixel_idx + 3] = 255;

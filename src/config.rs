@@ -43,17 +43,11 @@ pub struct Config {
     pub debug: DebugConfig,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Default, Deserialize, Clone)]
 #[serde(default)]
 pub struct DebugConfig {
     #[serde(default)]
     pub profiler: bool,
-}
-
-impl Default for DebugConfig {
-    fn default() -> Self {
-        Self { profiler: false }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

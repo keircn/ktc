@@ -192,7 +192,7 @@ fn create_format_table_fd(formats: &[crate::renderer::DmaBufFormat]) -> Result<O
     
     let fd = unsafe {
         let fd = libc::memfd_create(
-            b"dmabuf-format-table\0".as_ptr() as *const libc::c_char,
+            c"dmabuf-format-table".as_ptr(),
             libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
         );
         if fd < 0 {

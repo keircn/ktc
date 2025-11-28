@@ -544,19 +544,17 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                 let gpu = state.gpu_renderer.as_mut().unwrap();
                 if let Some(&tex) = gpu.get_texture(*id) {
                     tex
+                } else if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
+                    let data: &[u8] = unsafe {
+                        std::slice::from_raw_parts(
+                            win.pixel_cache.as_ptr() as *const u8,
+                            win.pixel_cache.len() * 4,
+                        )
+                    };
+                    let gpu = state.gpu_renderer.as_mut().unwrap();
+                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, data)
                 } else {
-                    if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
-                        let data: &[u8] = unsafe {
-                            std::slice::from_raw_parts(
-                                win.pixel_cache.as_ptr() as *const u8,
-                                win.pixel_cache.len() * 4,
-                            )
-                        };
-                        let gpu = state.gpu_renderer.as_mut().unwrap();
-                        gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, data)
-                    } else {
-                        continue;
-                    }
+                    continue;
                 }
             };
             
