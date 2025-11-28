@@ -16,7 +16,6 @@ impl GlobalDispatch<ZwlrScreencopyManagerV1, ()> for State {
         _global_data: &(),
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
-        log::info!("[screencopy] Client bound to screencopy manager");
         data_init.init(resource, ());
     }
 }
@@ -38,7 +37,6 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
                 output: _,
             } => {
                 let (width, height) = state.screen_size();
-                log::info!("[screencopy] CaptureOutput request: {}x{}", width, height);
                 let frame_data = ScreencopyFrameState {
                     x: 0,
                     y: 0,
@@ -57,7 +55,6 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
                 width,
                 height,
             } => {
-                log::info!("[screencopy] CaptureOutputRegion request: {}x{} at ({},{})", width, height, x, y);
                 let frame_data = ScreencopyFrameState {
                     x,
                     y,
@@ -67,9 +64,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
                 let screencopy_frame = data_init.init(frame, frame_data);
                 state.send_screencopy_buffer_info(&screencopy_frame, width, height);
             }
-            zwlr_screencopy_manager_v1::Request::Destroy => {
-                log::info!("[screencopy] Manager destroyed");
-            }
+            zwlr_screencopy_manager_v1::Request::Destroy => {}
             _ => {}
         }
     }
@@ -87,15 +82,12 @@ impl Dispatch<ZwlrScreencopyFrameV1, ScreencopyFrameState> for State {
     ) {
         match request {
             zwlr_screencopy_frame_v1::Request::Copy { buffer } => {
-                log::info!("[screencopy] Copy request for {}x{}", data.width, data.height);
                 state.queue_screencopy_frame(resource.clone(), buffer, data, false);
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
-                log::info!("[screencopy] CopyWithDamage request for {}x{}", data.width, data.height);
                 state.queue_screencopy_frame(resource.clone(), buffer, data, true);
             }
             zwlr_screencopy_frame_v1::Request::Destroy => {
-                log::info!("[screencopy] Frame destroyed");
                 state.screencopy_frames.retain(|f| f.frame.id() != resource.id());
             }
             _ => {}
@@ -106,7 +98,6 @@ impl Dispatch<ZwlrScreencopyFrameV1, ScreencopyFrameState> for State {
 impl State {
     fn send_screencopy_buffer_info(&self, frame: &ZwlrScreencopyFrameV1, width: i32, height: i32) {
         let stride = width as u32 * 4;
-        log::info!("[screencopy] Sending buffer info: {}x{} stride={}", width, height, stride);
         frame.buffer(
             wl_shm::Format::Xrgb8888,
             width as u32,
@@ -116,7 +107,6 @@ impl State {
 
         if frame.version() >= 3 {
             frame.buffer_done();
-            log::info!("[screencopy] Sent buffer_done (version {})", frame.version());
         }
     }
 
@@ -127,7 +117,6 @@ impl State {
         region: &ScreencopyFrameState,
         with_damage: bool,
     ) {
-        log::info!("[screencopy] Queuing frame: {}x{} with_damage={}", region.width, region.height, with_damage);
         self.screencopy_frames.push(PendingScreencopy {
             frame,
             buffer,
@@ -137,15 +126,12 @@ impl State {
             height: region.height,
             with_damage,
         });
-        log::info!("[screencopy] Pending frames: {}", self.screencopy_frames.len());
     }
 
     pub fn process_screencopy_frames(&mut self, has_damage: bool) {
         if self.screencopy_frames.is_empty() {
             return;
         }
-        
-        log::info!("[screencopy] Processing {} frames, has_damage={}", self.screencopy_frames.len(), has_damage);
         
         let mut frames = std::mem::take(&mut self.screencopy_frames);
         let mut deferred = Vec::new();
@@ -159,12 +145,10 @@ impl State {
 
         for pending in frames.drain(..) {
             if pending.with_damage && !has_damage {
-                log::info!("[screencopy] Deferring frame (waiting for damage)");
                 deferred.push(pending);
                 continue;
             }
 
-            log::info!("[screencopy] Copying frame {}x{}", pending.width, pending.height);
             if self.copy_frame_to_buffer(&pending) {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -186,42 +170,30 @@ impl State {
 
                 pending.frame.flags(zwlr_screencopy_frame_v1::Flags::empty());
                 pending.frame.ready((secs >> 32) as u32, secs as u32, nsecs);
-                log::info!("[screencopy] Frame ready sent");
             } else {
-                log::error!("[screencopy] Frame copy failed!");
+                log::error!("[screencopy] Frame copy failed");
                 pending.frame.failed();
             }
         }
 
         self.screencopy_frames = deferred;
-        if !self.screencopy_frames.is_empty() {
-            log::info!("[screencopy] {} frames deferred", self.screencopy_frames.len());
-        }
     }
 
     fn copy_frame_to_buffer(&mut self, pending: &PendingScreencopy) -> bool {
         let buffer_id = pending.buffer.id();
         let buffer_data = match self.buffers.get(&buffer_id) {
             Some(data) => data.clone(),
-            None => {
-                log::error!("[screencopy] Buffer {:?} not found", buffer_id);
-                return false;
-            }
+            None => return false,
         };
 
         if buffer_data.width != pending.width || buffer_data.height != pending.height {
-            log::error!("[screencopy] Buffer size mismatch: buffer={}x{} expected={}x{}", 
-                buffer_data.width, buffer_data.height, pending.width, pending.height);
             return false;
         }
 
         let pool_id = buffer_data.pool_id;
         let pool_data = match self.shm_pools.get_mut(&pool_id) {
             Some(data) => data,
-            None => {
-                log::error!("[screencopy] Pool {:?} not found", pool_id);
-                return false;
-            }
+            None => return false,
         };
 
         if pool_data.mmap_ptr.is_none() {
@@ -237,7 +209,6 @@ impl State {
                 );
 
                 if ptr == libc::MAP_FAILED {
-                    log::error!("[screencopy] mmap failed");
                     return false;
                 }
 
@@ -247,13 +218,9 @@ impl State {
 
         let mmap_ptr = match pool_data.mmap_ptr {
             Some(ptr) => ptr,
-            None => {
-                log::error!("[screencopy] mmap_ptr is None");
-                return false;
-            }
+            None => return false,
         };
 
-        // Use GPU renderer if available, otherwise use canvas
         if let Some(ref gpu) = self.gpu_renderer {
             let pixels = gpu.read_pixels(pending.x, pending.y, pending.width, pending.height);
             
@@ -265,8 +232,6 @@ impl State {
                     pixels.len(),
                 );
             }
-            
-            log::info!("[screencopy] Copied {}x{} from GPU", pending.width, pending.height);
         } else {
             let canvas_pixels = self.canvas.as_slice();
             let canvas_width = self.canvas.width as i32;
@@ -294,8 +259,6 @@ impl State {
                     }
                 }
             }
-            
-            log::info!("[screencopy] Copied {}x{} from canvas", pending.width, pending.height);
         }
 
         pending.buffer.release();

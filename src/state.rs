@@ -759,7 +759,7 @@ impl State {
             return None;
         }
         
-        log::info!("Created keymap (size={})", size);
+        log::debug!("Created keymap (size={})", size);
         
         Some(KeymapData {
             fd: file.into(),
@@ -936,8 +936,7 @@ impl State {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
-        log::info!("[window] Adding window {} (existing: {:?})", 
-            id, self.windows.iter().map(|w| w.id).collect::<Vec<_>>());
+        log::debug!("[window] Adding window {}", id);
         
         let (screen_width, screen_height) = self.screen_size();
         let num_windows = self.windows.len() + 1;
@@ -967,8 +966,6 @@ impl State {
     
     pub fn relayout_windows(&mut self) {
         let num_windows = self.windows.len();
-        log::debug!("[relayout] Starting relayout for {} windows: {:?}", 
-            num_windows, self.windows.iter().map(|w| w.id).collect::<Vec<_>>());
         if num_windows == 0 {
             return;
         }
@@ -977,7 +974,6 @@ impl State {
         
         for (i, window) in self.windows.iter_mut().enumerate() {
             let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
-            log::debug!("[relayout] Window {} (idx {}) geometry: {:?}", window.id, i, new_geometry);
             if window.geometry != new_geometry {
                 let old_geom = window.geometry;
                 window.geometry = new_geometry;
@@ -986,7 +982,6 @@ impl State {
                 if old_geom.width != new_geometry.width || old_geom.height != new_geometry.height {
                     window.cache_width = 0;
                     window.cache_height = 0;
-                    log::debug!("[relayout] Window {} cache invalidated due to size change", window.id);
                 }
             }
         }
@@ -1058,15 +1053,11 @@ impl State {
     }
     
     pub fn remove_window(&mut self, id: WindowId) {
-        log::info!("[window] Removing window {} (total before: {})", id, self.windows.len());
         if let Some(pos) = self.windows.iter().position(|w| w.id == id) {
             let geometry = self.windows[pos].geometry;
             self.damage_tracker.add_damage(geometry);
             self.windows.swap_remove(pos);
-            log::info!("[window] Window {} removed, remaining: {:?}", 
-                id, self.windows.iter().map(|w| w.id).collect::<Vec<_>>());
-        } else {
-            log::warn!("[window] Window {} not found for removal!", id);
+            log::debug!("[window] Removed window {}", id);
         }
         self.keyboard_to_window.retain(|_, window_id| *window_id != id);
         
@@ -1084,7 +1075,6 @@ impl State {
     pub fn close_window(&mut self, id: WindowId) {
         if let Some(window) = self.windows.iter().find(|w| w.id == id) {
             window.xdg_toplevel.close();
-            log::info!("[window] Sent close request to window {}", id);
         }
     }
     
@@ -1143,10 +1133,7 @@ impl State {
     pub fn set_focus_without_relayout(&mut self, window_id: WindowId) {
         let old_focused = self.focused_window;
         
-        log::info!("[focus] set_focus_without_relayout: old={:?} new={}", old_focused, window_id);
-        
         if old_focused == Some(window_id) {
-            log::debug!("[focus] Already focused on window {}, skipping", window_id);
             return;
         }
         
@@ -1170,17 +1157,11 @@ impl State {
                 let old_client = old_window.wl_surface.client();
                 let serial = self.next_keyboard_serial();
                 
-                log::info!("[focus] Sending keyboard.leave to old window {} client={:?}", 
-                    old_id, old_client.as_ref().map(|c| c.id()));
-                
-                let mut leave_count = 0;
                 for keyboard in self.keyboards.iter() {
                     if keyboard.client() == old_client {
                         keyboard.leave(serial, &old_surface);
-                        leave_count += 1;
                     }
                 }
-                log::info!("[focus] Sent keyboard.leave to {} keyboards", leave_count);
             }
         }
         
@@ -1191,21 +1172,13 @@ impl State {
         if let Some((surface, Some(new_client))) = new_window_info {
             let serial = self.next_keyboard_serial();
             
-            log::info!("[focus] Sending keyboard.enter to new window {} client={:?}", 
-                window_id, new_client.id());
-            
-            let mut enter_count = 0;
             for keyboard in self.keyboards.iter() {
                 if keyboard.client().as_ref() == Some(&new_client) {
                     keyboard.enter(serial, &surface, vec![]);
                     self.keyboard_to_window.insert(keyboard.id(), window_id);
-                    enter_count += 1;
                 }
             }
-            log::info!("[focus] Sent keyboard.enter to {} keyboards", enter_count);
         }
-        
-        log::info!("[focus] Total keyboards registered: {}", self.keyboards.len());
     }
     
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
@@ -1282,10 +1255,7 @@ impl State {
             let buffer_id = buffer.id();
             let buffer_data = match self.buffers.get(&buffer_id) {
                 Some(d) => d,
-                None => {
-                    log::warn!("[cache] Window {} buffer id={:?} not found in buffers map!", window_id, buffer_id);
-                    return false;
-                }
+                None => return false,
             };
             let expected_w = window.geometry.width;
             let title_bar_height = self.config.title_bar_height();
@@ -1293,19 +1263,10 @@ impl State {
             (buffer_id, buffer_data.pool_id.clone(), buffer_data.offset, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
         };
         
-        log::debug!(
-            "[cache] Window {} using buffer_id={:?} pool_id={:?} offset={} size={}x{}",
-            window_id, buffer_id, pool_id, buf_offset, buf_width, buf_height
-        );
-        
         let min_width = (expected_width / 2).max(10) as usize;
         let min_height = (expected_height / 2).max(10) as usize;
         
         if buf_width < min_width || buf_height < min_height {
-            log::warn!(
-                "[cache] Window {} rejecting buffer id={:?} size={}x{} (expected ~{}x{}, min {}x{})",
-                window_id, buffer_id, buf_width, buf_height, expected_width, expected_height, min_width, min_height
-            );
             return false;
         }
         
@@ -1370,10 +1331,7 @@ impl State {
     pub fn get_focused_keyboards(&self) -> Vec<WlKeyboard> {
         let focused_id = match self.focused_window {
             Some(id) => id,
-            None => {
-                log::debug!("[keyboard] get_focused_keyboards: no focused window");
-                return vec![];
-            }
+            None => return vec![],
         };
         
         let focused_client = self.windows.iter()
@@ -1382,21 +1340,13 @@ impl State {
         
         let focused_client = match focused_client {
             Some(c) => c,
-            None => {
-                log::debug!("[keyboard] get_focused_keyboards: focused window {} has no client", focused_id);
-                return vec![];
-            }
+            None => return vec![],
         };
         
-        let keyboards: Vec<_> = self.keyboards.iter()
+        self.keyboards.iter()
             .filter(|kb| kb.client().as_ref() == Some(&focused_client))
             .cloned()
-            .collect();
-        
-        log::debug!("[keyboard] get_focused_keyboards: window={} client={:?} returning {} of {} keyboards",
-            focused_id, focused_client.id(), keyboards.len(), self.keyboards.len());
-        
-        keyboards
+            .collect()
     }
     
     pub fn window_at(&self, x: f64, y: f64) -> Option<WindowId> {
