@@ -397,12 +397,22 @@ fn run_standalone() {
         .insert_source(
             calloop::timer::Timer::immediate(),
             |_deadline, _: &mut (), data| {
+                let frame_start = std::time::Instant::now();
+                
+                let input_start = std::time::Instant::now();
                 if data.input_pending {
                     data.input_pending = false;
                     process_input_frame(data);
                 }
+                let input_time = input_start.elapsed().as_micros() as u64;
                 
+                let render_start = std::time::Instant::now();
                 render_standalone(&mut data.state, &mut data.display, data.drm_info.as_mut());
+                let render_time = render_start.elapsed().as_micros() as u64;
+                
+                let total_time = frame_start.elapsed().as_micros() as u64;
+                data.frame_profiler.record_frame(input_time, render_time, total_time, &data.state);
+                
                 calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(16))
             },
         )
@@ -415,6 +425,7 @@ fn run_standalone() {
         input_handler,
         socket_name,
         input_pending: false,
+        frame_profiler: FrameProfiler::new(),
     };
     
     if let Some(ref drm) = loop_data.drm_info {
@@ -793,6 +804,77 @@ struct StandaloneLoopData {
     input_handler: Option<input::InputHandler>,
     socket_name: String,
     input_pending: bool,
+    frame_profiler: FrameProfiler,
+}
+
+struct FrameProfiler {
+    frame_count: u64,
+    last_log_time: std::time::Instant,
+    input_time_us: u64,
+    render_time_us: u64,
+    total_time_us: u64,
+    slow_frames: u32,
+}
+
+impl FrameProfiler {
+    fn new() -> Self {
+        Self {
+            frame_count: 0,
+            last_log_time: std::time::Instant::now(),
+            input_time_us: 0,
+            render_time_us: 0,
+            total_time_us: 0,
+            slow_frames: 0,
+        }
+    }
+    
+    fn record_frame(&mut self, input_us: u64, render_us: u64, total_us: u64, state: &State) {
+        self.frame_count += 1;
+        self.input_time_us += input_us;
+        self.render_time_us += render_us;
+        self.total_time_us += total_us;
+        
+        if total_us > 16666 {
+            self.slow_frames += 1;
+        }
+        
+        if self.last_log_time.elapsed().as_secs() >= 5 {
+            let frames = self.frame_count.max(1);
+            log::info!(
+                "[perf] frames={} slow={} avg_input={}us avg_render={}us avg_total={}us",
+                self.frame_count,
+                self.slow_frames,
+                self.input_time_us / frames,
+                self.render_time_us / frames,
+                self.total_time_us / frames
+            );
+            
+            Self::log_memory_stats(state);
+            
+            self.frame_count = 0;
+            self.input_time_us = 0;
+            self.render_time_us = 0;
+            self.total_time_us = 0;
+            self.slow_frames = 0;
+            self.last_log_time = std::time::Instant::now();
+        }
+    }
+    
+    fn log_memory_stats(state: &State) {
+        let canvas_bytes = state.canvas.pixels.len() * 4;
+        let window_cache_bytes: usize = state.windows.iter()
+            .map(|w| w.pixel_cache.len() * 4)
+            .sum();
+        let total_mb = (canvas_bytes + window_cache_bytes) as f64 / (1024.0 * 1024.0);
+        
+        log::debug!(
+            "[mem] canvas={}KB window_cache={}KB total={:.2}MB windows={}",
+            canvas_bytes / 1024,
+            window_cache_bytes / 1024,
+            total_mb,
+            state.windows.len()
+        );
+    }
 }
 
 struct DrmInfo {
