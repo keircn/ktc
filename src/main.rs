@@ -3,8 +3,10 @@ mod protocols;
 mod input;
 mod logging;
 mod session;
+mod config;
 
 use clap::{Parser, Subcommand};
+use config::Config;
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
 use wayland_server::{Display, ListeningSocket, Resource};
@@ -57,6 +59,9 @@ fn main() {
             
             logging::FileLogger::init().expect("Failed to initialize logging");
             
+            let config = Config::load();
+            log::debug!("Config: {:?}", config);
+            
             if nested && standalone {
                 eprintln!("Error: Cannot specify both --nested and --standalone");
                 std::process::exit(1);
@@ -79,10 +84,10 @@ fn main() {
             
             if is_nested {
                 log::info!("Running in nested mode (client of existing compositor)");
-                run_nested();
+                run_nested(config);
             } else {
                 log::info!("Running in standalone mode (native compositor)");
-                run_standalone();
+                run_standalone(config);
             }
         }
         None => {
@@ -139,7 +144,7 @@ fn setup_wayland() -> (Display<State>, ListeningSocket) {
     (display, socket)
 }
 
-fn run_nested() {
+fn run_nested(config: Config) {
     use winit::event_loop::{EventLoop, ControlFlow};
     use winit::event::{Event, WindowEvent};
     use winit::window::Window;
@@ -206,7 +211,7 @@ fn run_nested() {
 
     let mut loop_data = NestedLoopData { 
         display,
-        state: State::new(),
+        state: State::new(config),
     };
     
     let initial_size = window.inner_size();
@@ -261,7 +266,7 @@ fn run_nested() {
     }).expect("Event loop error");
 }
 
-fn run_standalone() {
+fn run_standalone(config: Config) {
     use std::fs::OpenOptions;
     use input::InputHandler;
     
@@ -420,7 +425,7 @@ fn run_standalone() {
 
     let mut loop_data = StandaloneLoopData {
         display,
-        state: State::new(),
+        state: State::new(config),
         drm_info,
         input_handler,
         socket_name,

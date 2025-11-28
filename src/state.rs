@@ -6,6 +6,7 @@ use wayland_server::Resource;
 use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
 use wayland_server::backend::ObjectId;
 use crate::protocols::screencopy::PendingScreencopy;
+use crate::config::Config;
 
 pub type WindowId = u64;
 pub type OutputId = u64;
@@ -588,6 +589,7 @@ pub struct Window {
 }
 
 pub struct State {
+    pub config: Config,
     pub windows: Vec<Window>,
     pub focused_window: Option<WindowId>,
     pub next_window_id: WindowId,
@@ -672,13 +674,14 @@ pub struct ScreencopyFrameState {
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
         let default_width = 1920;
         let default_height = 1080;
         
-        let keymap_data = Self::create_keymap();
+        let keymap_data = Self::create_keymap(&config);
         
         Self {
+            config,
             windows: Vec::new(),
             focused_window: None,
             next_window_id: 1,
@@ -710,18 +713,22 @@ impl State {
         }
     }
     
-    fn create_keymap() -> Option<KeymapData> {
+    fn create_keymap(config: &Config) -> Option<KeymapData> {
         use std::io::Write;
         use std::os::fd::FromRawFd;
         
         let xkb_context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
         let keymap = xkbcommon::xkb::Keymap::new_from_names(
             &xkb_context,
-            "",
-            "",
-            "",
-            "",
-            None,
+            "",  // rules - use default
+            config.keyboard.model.as_str(),
+            config.keyboard.layout.as_str(),
+            "",  // variant - use default
+            if config.keyboard.options.is_empty() {
+                None
+            } else {
+                Some(config.keyboard.options.clone())
+            },
             xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
         )?;
         
