@@ -243,12 +243,28 @@ impl Canvas {
         let bg_light = 0xFF16213E;
         let tile_size = 32;
         
+        let width = self.width;
+        let stride = self.stride;
+        let pixels = &mut self.pixels;
+        
         for y in 0..self.height {
-            for x in 0..self.width {
+            let ty = y / tile_size;
+            let row_start = y * stride;
+            let base_color = if ty % 2 == 0 { bg_dark } else { bg_light };
+            let alt_color = if ty % 2 == 0 { bg_light } else { bg_dark };
+            
+            let mut x = 0;
+            while x < width {
                 let tx = x / tile_size;
-                let ty = y / tile_size;
-                let color = if (tx + ty) % 2 == 0 { bg_dark } else { bg_light };
-                self.pixels[y * self.stride + x] = color;
+                let color = if tx % 2 == 0 { base_color } else { alt_color };
+                let tile_end = ((tx + 1) * tile_size).min(width);
+                let fill_len = tile_end - x;
+                
+                let start = row_start + x;
+                let end = start + fill_len;
+                pixels[start..end].fill(color);
+                
+                x = tile_end;
             }
         }
     }
