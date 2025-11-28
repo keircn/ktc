@@ -88,7 +88,10 @@ pub struct GpuRenderer {
     crtc: crtc::Handle,
     connector: connector::Handle,
     mode: drm::control::Mode,
+    
     current_fb: Option<framebuffer::Handle>,
+    current_bo: *mut gbm_sys::gbm_bo,
+    mode_set: bool,
     
     texture_program: glow::Program,
     color_program: glow::Program,
@@ -229,8 +232,6 @@ impl GpuRenderer {
         let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
         let supported_formats = Self::query_dmabuf_formats();
         log::info!("[gpu] Supported DMA-BUF formats: {}", supported_formats.len());
-        
-        // Keep the raw pointer but don't forget the surface - we'll manage it via the pointer
         let gbm_surface_raw = gbm_surface.as_raw() as *mut std::ffi::c_void;
         std::mem::forget(gbm_surface);
         
@@ -247,6 +248,8 @@ impl GpuRenderer {
             connector: connector_handle,
             mode,
             current_fb: None,
+            current_bo: std::ptr::null_mut(),
+            mode_set: false,
             texture_program,
             color_program,
             quad_vao,
@@ -373,7 +376,6 @@ impl GpuRenderer {
             let width = gbm_sys::gbm_bo_get_width(bo);
             let height = gbm_sys::gbm_bo_get_height(bo);
             
-            // Create a wrapper that implements Buffer trait
             struct GbmBuffer {
                 handle: u32,
                 width: u32,
@@ -407,22 +409,92 @@ impl GpuRenderer {
                 }
             };
             
-            if let Err(e) = self.drm_card.set_crtc(
-                self.crtc,
-                Some(fb),
-                (0, 0),
-                &[self.connector],
-                Some(self.mode),
-            ) {
-                log::error!("[gpu] set_crtc failed: {}", e);
+            if !self.mode_set {
+                if let Err(e) = self.drm_card.set_crtc(
+                    self.crtc,
+                    Some(fb),
+                    (0, 0),
+                    &[self.connector],
+                    Some(self.mode),
+                ) {
+                    log::error!("[gpu] set_crtc failed: {}", e);
+                    self.drm_card.destroy_framebuffer(fb).ok();
+                    gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
+                    return;
+                }
+                self.mode_set = true;
+                self.current_fb = Some(fb);
+                self.current_bo = bo;
+            } else {
+                use drm::control::PageFlipFlags;
+                
+                match self.drm_card.page_flip(
+                    self.crtc,
+                    fb,
+                    PageFlipFlags::EVENT,
+                    None,
+                ) {
+                    Ok(()) => {
+                        self.wait_for_flip();
+                        
+                        if let Some(old_fb) = self.current_fb.take() {
+                            self.drm_card.destroy_framebuffer(old_fb).ok();
+                        }
+                        if !self.current_bo.is_null() {
+                            gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
+                        }
+                        
+                        self.current_fb = Some(fb);
+                        self.current_bo = bo;
+                    }
+                    Err(e) => {
+                        log::warn!("[gpu] page_flip failed: {}, falling back to set_crtc", e);
+                        if let Err(e) = self.drm_card.set_crtc(
+                            self.crtc,
+                            Some(fb),
+                            (0, 0),
+                            &[self.connector],
+                            Some(self.mode),
+                        ) {
+                            log::error!("[gpu] set_crtc fallback failed: {}", e);
+                            self.drm_card.destroy_framebuffer(fb).ok();
+                            gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
+                            return;
+                        }
+                        
+                        if let Some(old_fb) = self.current_fb.take() {
+                            self.drm_card.destroy_framebuffer(old_fb).ok();
+                        }
+                        if !self.current_bo.is_null() {
+                            gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
+                        }
+                        
+                        self.current_fb = Some(fb);
+                        self.current_bo = bo;
+                    }
+                }
             }
-            
-            if let Some(old_fb) = self.current_fb.take() {
-                self.drm_card.destroy_framebuffer(old_fb).ok();
+        }
+    }
+    
+    fn wait_for_flip(&self) {
+        use std::os::fd::AsRawFd;
+        
+        let fd = self.drm_card.as_fd().as_raw_fd();
+        let mut fds = [libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        
+        let timeout_ms = 100;
+        
+        unsafe {
+            let ret = libc::poll(fds.as_mut_ptr(), 1, timeout_ms);
+            if ret > 0 && (fds[0].revents & libc::POLLIN) != 0 {
+                let mut buf = [0u8; 1024];
+                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
             }
-            self.current_fb = Some(fb);
-            
-            gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
         }
     }
     
