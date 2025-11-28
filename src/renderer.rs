@@ -586,6 +586,10 @@ impl GpuRenderer {
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+    
+    pub fn get_texture(&self, id: u64) -> Option<&glow::Texture> {
+        self.shm_textures.get(&id)
+    }
 }
 
 impl Drop for GpuRenderer {
