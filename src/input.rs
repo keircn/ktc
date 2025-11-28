@@ -34,7 +34,6 @@ pub struct InputStats {
     pub motion_events: u32,
     pub button_events: u32,
     pub key_events: u32,
-    pub dispatch_time_us: u64,
     pub process_time_us: u64,
 }
 

@@ -42,8 +42,6 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
                     y: 0,
                     width,
                     height,
-                    buffer: None,
-                    with_damage: false,
                 };
                 let screencopy_frame = data_init.init(frame, frame_data);
                 state.send_screencopy_buffer_info(&screencopy_frame, width, height);
@@ -62,8 +60,6 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
                     y,
                     width,
                     height,
-                    buffer: None,
-                    with_damage: false,
                 };
                 let screencopy_frame = data_init.init(frame, frame_data);
                 state.send_screencopy_buffer_info(&screencopy_frame, width, height);
@@ -103,7 +99,7 @@ impl State {
     fn send_screencopy_buffer_info(&self, frame: &ZwlrScreencopyFrameV1, width: i32, height: i32) {
         let stride = width as u32 * 4;
         frame.buffer(
-            wl_shm::Format::Xrgb8888.into(),
+            wl_shm::Format::Xrgb8888,
             width as u32,
             height as u32,
             stride,

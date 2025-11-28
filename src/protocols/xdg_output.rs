@@ -50,10 +50,7 @@ impl Dispatch<ZxdgOutputV1, WlOutput> for State {
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
-        match request {
-            zxdg_output_v1::Request::Destroy => {}
-            _ => {}
-        }
+        if let zxdg_output_v1::Request::Destroy = request {}
     }
 }
 

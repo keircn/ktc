@@ -59,12 +59,9 @@ impl Dispatch<WlShm, ()> for State {
         _dhandle: &wayland_server::DisplayHandle,
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
-        match request {
-            wl_shm::Request::CreatePool { id, fd, size } => {
-                let pool = data_init.init(id, ());
-                state.add_shm_pool(&pool, fd, size);
-            }
-            _ => {}
+        if let wl_shm::Request::CreatePool { id, fd, size } = request {
+            let pool = data_init.init(id, ());
+            state.add_shm_pool(&pool, fd, size);
         }
     }
 }
@@ -79,13 +76,10 @@ impl Dispatch<WlShmPool, ()> for State {
         _dhandle: &wayland_server::DisplayHandle,
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
-        match request {
-            wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } => {
-                let buffer = data_init.init(id, ());
-                log::debug!("[buffer] CreateBuffer: {}x{} stride={} offset={}", width, height, stride, offset);
-                state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
-            }
-            _ => {}
+        if let wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } = request {
+            let buffer = data_init.init(id, ());
+            log::debug!("[buffer] CreateBuffer: {}x{} stride={} offset={}", width, height, stride, offset);
+            state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
         }
     }
 }

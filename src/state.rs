@@ -34,6 +34,7 @@ impl Rectangle {
         Rectangle { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
     }
 
+    #[allow(dead_code)]
     pub fn intersects(&self, other: &Rectangle) -> bool {
         self.x < other.x + other.width
             && self.x + self.width > other.x
@@ -102,10 +103,12 @@ impl DamageTracker {
         self.cursor_only && !self.full_damage && self.regions.is_empty()
     }
 
+    #[allow(dead_code)]
     pub fn is_full_damage(&self) -> bool {
         self.full_damage
     }
 
+    #[allow(dead_code)]
     pub fn damage_regions(&self) -> &[Rectangle] {
         &self.regions
     }
@@ -148,6 +151,7 @@ pub struct Output {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum OutputTransform {
     #[default]
     Normal,
@@ -180,6 +184,7 @@ impl Output {
         }
     }
 
+    #[allow(dead_code)]
     pub fn usable_area(&self) -> Rectangle {
         Rectangle {
             x: self.x,
@@ -189,6 +194,7 @@ impl Output {
         }
     }
 
+    #[allow(dead_code)]
     pub fn scaled_size(&self) -> (i32, i32) {
         (self.width / self.scale, self.height / self.scale)
     }
@@ -233,6 +239,7 @@ impl Canvas {
         }
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self, color: u32) {
         self.pixels.fill(color);
     }
@@ -266,6 +273,7 @@ impl Canvas {
         }
     }
 
+    #[allow(dead_code)]
     pub fn draw_border(&mut self, x: i32, y: i32, width: i32, height: i32, color: u32, thickness: i32) {
         let x = x.max(0) as usize;
         let y = y.max(0) as usize;
@@ -314,6 +322,7 @@ impl Canvas {
         }
     }
 
+    #[allow(dead_code)]
     pub fn blit(&mut self, src: &[u32], src_width: usize, src_height: usize, dst_x: i32, dst_y: i32) {
         let dst_x = dst_x.max(0) as usize;
         let dst_y = dst_y.max(0) as usize;
@@ -357,6 +366,7 @@ impl Canvas {
         }
     }
 
+    #[allow(dead_code)]
     pub fn blit_direct(&mut self, src: &[u32], src_width: usize, src_height: usize, src_stride: usize, dst_x: i32, dst_y: i32) {
         if dst_x >= self.width as i32 || dst_y >= self.height as i32 {
             return;
@@ -401,10 +411,12 @@ impl Canvas {
         &self.pixels
     }
 
+    #[allow(dead_code)]
     pub fn as_mut_slice(&mut self) -> &mut [u32] {
         &mut self.pixels
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_decorations(&mut self, x: i32, y: i32, width: i32, height: i32, title_height: i32, is_focused: bool, title_focused: u32, title_unfocused: u32, border_focused: u32, border_unfocused: u32) {
         let title_bg = if is_focused { title_focused } else { title_unfocused };
         let border_color = if is_focused { border_focused } else { border_unfocused };
@@ -601,7 +613,6 @@ pub struct State {
     pub keyboards: Vec<WlKeyboard>,
     pub keyboard_to_window: HashMap<ObjectId, WindowId>,
     pub pointers: Vec<WlPointer>,
-    pub pointer_to_window: HashMap<ObjectId, WindowId>,
     pub keyboard_serial: u32,
     pub pointer_serial: u32,
     
@@ -623,7 +634,6 @@ pub struct State {
 
     pub damage_tracker: DamageTracker,
     pub last_cursor_pos: (i32, i32),
-    pub pending_surface_commits: Vec<ObjectId>,
 }
 
 impl Drop for State {
@@ -651,6 +661,7 @@ pub struct BufferData {
     pub width: i32,
     pub height: i32,
     pub stride: i32,
+    #[allow(dead_code)]
     pub format: u32,
 }
 
@@ -665,8 +676,6 @@ pub struct ScreencopyFrameState {
     pub y: i32,
     pub width: i32,
     pub height: i32,
-    pub buffer: Option<WlBuffer>,
-    pub with_damage: bool,
 }
 
 impl State {
@@ -691,7 +700,6 @@ impl State {
             keyboards: Vec::new(),
             keyboard_to_window: HashMap::new(),
             pointers: Vec::new(),
-            pointer_to_window: HashMap::new(),
             keyboard_serial: 0,
             pointer_serial: 0,
             pointer_x: 0.0,
@@ -706,7 +714,6 @@ impl State {
             screencopy_frames: Vec::new(),
             damage_tracker: DamageTracker::new(),
             last_cursor_pos: (0, 0),
-            pending_surface_commits: Vec::new(),
         }
     }
     
@@ -915,6 +922,7 @@ impl State {
         self.pointer_serial
     }
     
+    #[allow(dead_code)]
     pub fn add_window(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface) -> WindowId {
         let id = self.add_window_without_relayout(xdg_surface, xdg_toplevel, wl_surface);
         self.relayout_windows();
@@ -1007,6 +1015,7 @@ impl State {
         self.windows.iter_mut().find(|w| w.wl_surface.id() == surface_id)
     }
     
+    #[allow(dead_code)]
     pub fn get_focused_window(&mut self) -> Option<&mut Window> {
         let focused_id = self.focused_window?;
         self.windows.iter_mut().find(|w| w.id == focused_id)
@@ -1107,6 +1116,7 @@ impl State {
         self.set_focus_without_relayout(window_id);
     }
     
+    #[allow(dead_code)]
     fn send_configure_to_window(&mut self, window_id: WindowId) {
         if let Some(window) = self.windows.iter().find(|w| w.id == window_id) {
             let geometry = window.geometry;
@@ -1193,6 +1203,7 @@ impl State {
         self.shm_pools.insert(id, ShmPoolData { fd, size, mmap_ptr: None });
     }
     
+    #[allow(clippy::too_many_arguments)]
     pub fn add_buffer(&mut self, buffer: &WlBuffer, pool: &WlShmPool, offset: i32, 
                       width: i32, height: i32, stride: i32, format: u32) {
         let buffer_id = buffer.id();
@@ -1207,6 +1218,7 @@ impl State {
         });
     }
     
+    #[allow(dead_code)]
     pub fn get_buffer_pixels(&mut self, buffer: &WlBuffer) -> Option<(&[u32], usize)> {
         let buffer_id = buffer.id();
         let buffer_data = self.buffers.get(&buffer_id)?;

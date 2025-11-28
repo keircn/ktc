@@ -27,7 +27,7 @@ fn default_focus_prev() -> String { "mod+k".to_string() }
 fn default_close_window() -> String { "mod+shift+q".to_string() }
 fn default_exit() -> String { "ctrl+alt+q".to_string() }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct Config {
     pub appearance: AppearanceConfig,
@@ -42,8 +42,10 @@ pub struct AppearanceConfig {
     #[serde(default = "default_title_bar_height")]
     pub title_bar_height: i32,
     #[serde(default = "default_border_width")]
+    #[allow(dead_code)]
     pub border_width: i32,
     #[serde(default = "default_gap")]
+    #[allow(dead_code)]
     pub gap: i32,
     #[serde(default = "default_background_dark")]
     pub background_dark: String,
@@ -69,13 +71,16 @@ pub struct KeyboardConfig {
     #[serde(default = "default_keyboard_options")]
     pub options: String,
     #[serde(default = "default_repeat_rate")]
+    #[allow(dead_code)]
     pub repeat_rate: i32,
     #[serde(default = "default_repeat_delay")]
+    #[allow(dead_code)]
     pub repeat_delay: i32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
+#[allow(dead_code)]
 pub struct CursorConfig {
     #[serde(default = "default_cursor_theme")]
     pub theme: String,
@@ -85,6 +90,7 @@ pub struct CursorConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
+#[allow(dead_code)]
 pub struct KeybindsConfig {
     #[serde(default = "default_mod_key")]
     pub mod_key: String,
@@ -96,17 +102,6 @@ pub struct KeybindsConfig {
     pub close_window: String,
     #[serde(default = "default_exit")]
     pub exit: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            appearance: AppearanceConfig::default(),
-            keyboard: KeyboardConfig::default(),
-            cursor: CursorConfig::default(),
-            keybinds: KeybindsConfig::default(),
-        }
-    }
 }
 
 impl Default for AppearanceConfig {

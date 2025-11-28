@@ -215,13 +215,8 @@ const KDGETMODE: libc::c_ulong = 0x4B3B;
 const KDGKBMODE: libc::c_ulong = 0x4B44;
 const KDSKBMODE: libc::c_ulong = 0x4B45;
 
-const KD_TEXT: i32 = 0x00;
 const KD_GRAPHICS: i32 = 0x01;
 
-const K_RAW: i32 = 0x00;
-const K_XLATE: i32 = 0x01;
-const K_MEDIUMRAW: i32 = 0x02;
-const K_UNICODE: i32 = 0x03;
 const K_OFF: i32 = 0x04;
 
 const VT_GETSTATE: libc::c_ulong = 0x5603;
