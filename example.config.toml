@@ -64,18 +64,28 @@ size = 24
 # Modifier key: "alt", "super", "ctrl"
 mod_key = "alt"
 
-# Exit compositor
-exit = "ctrl+alt+q"
+# Keybinds use [[keybinds.bind]] format with key and action
+# Actions: exit, focus_next, focus_prev, close_window, exec <command>
 
-# Launch terminal (foot)
-launch_terminal = "mod+Return"
+[[keybinds.bind]]
+key = "ctrl+alt+q"
+action = "exit"
 
-# Focus next/previous window
-focus_next = "mod+j"
-focus_prev = "mod+k"
+[[keybinds.bind]]
+key = "mod+Return"
+action = "exec foot"
 
-# Close focused window
-close_window = "mod+shift+q"
+[[keybinds.bind]]
+key = "mod+j"
+action = "focus_next"
+
+[[keybinds.bind]]
+key = "mod+k"
+action = "focus_prev"
+
+[[keybinds.bind]]
+key = "mod+shift+q"
+action = "close_window"
 
 [debug]
 # Show on-screen profiler overlay (FPS, frame time, memory usage)

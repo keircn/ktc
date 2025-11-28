@@ -133,7 +133,7 @@ pub struct InputFrame {
     pub buttons: Vec<ButtonEvent>,
     pub keys: Vec<KeyEvent>,
     pub exit_compositor: bool,
-    pub launch_terminal: bool,
+    pub exec_command: Option<String>,
     pub focus_next: bool,
     pub focus_prev: bool,
     pub close_window: bool,
@@ -149,7 +149,7 @@ impl InputFrame {
         self.buttons.clear();
         self.keys.clear();
         self.exit_compositor = false;
-        self.launch_terminal = false;
+        self.exec_command = None;
         self.focus_next = false;
         self.focus_prev = false;
         self.close_window = false;
@@ -161,7 +161,7 @@ impl InputFrame {
             || !self.buttons.is_empty()
             || !self.keys.is_empty()
             || self.exit_compositor
-            || self.launch_terminal
+            || self.exec_command.is_some()
             || self.focus_next
             || self.focus_prev
             || self.close_window
@@ -391,28 +391,21 @@ impl InputHandler {
                         && bind.shift == self.shift
                         && bind.super_key == self.super_key
                     {
-                        match action.as_str() {
-                            "exit" => {
-                                self.frame.exit_compositor = true;
-                                return;
-                            }
-                            "launch_terminal" => {
-                                self.frame.launch_terminal = true;
-                                return;
-                            }
-                            "focus_next" => {
-                                self.frame.focus_next = true;
-                                return;
-                            }
-                            "focus_prev" => {
-                                self.frame.focus_prev = true;
-                                return;
-                            }
-                            "close_window" => {
-                                self.frame.close_window = true;
-                                return;
-                            }
-                            _ => {}
+                        if action == "exit" {
+                            self.frame.exit_compositor = true;
+                            return;
+                        } else if action == "focus_next" {
+                            self.frame.focus_next = true;
+                            return;
+                        } else if action == "focus_prev" {
+                            self.frame.focus_prev = true;
+                            return;
+                        } else if action == "close_window" {
+                            self.frame.close_window = true;
+                            return;
+                        } else if let Some(cmd) = action.strip_prefix("exec ") {
+                            self.frame.exec_command = Some(cmd.to_string());
+                            return;
                         }
                     }
                 }

@@ -391,20 +391,25 @@ fn process_input(data: &mut LoopData) {
         return;
     }
     
-    if frame.launch_terminal {
+    if let Some(ref cmd) = frame.exec_command {
         let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
             .unwrap_or_else(|_| "/tmp".to_string());
         
-        match std::process::Command::new("kitty")
-            .env("WAYLAND_DISPLAY", &data.socket_name)
-            .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-            .stderr(std::process::Stdio::null())
-            .spawn() {
-            Ok(child) => {
-                session::register_child(child.id());
-            }
-            Err(e) => {
-                log::error!("Failed to launch terminal: {}", e);
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if let Some((program, args)) = parts.split_first() {
+            match std::process::Command::new(program)
+                .args(args)
+                .env("WAYLAND_DISPLAY", &data.socket_name)
+                .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+                .stderr(std::process::Stdio::null())
+                .spawn() {
+                Ok(child) => {
+                    session::register_child(child.id());
+                    log::info!("Launched: {}", cmd);
+                }
+                Err(e) => {
+                    log::error!("Failed to launch '{}': {}", cmd, e);
+                }
             }
         }
     }

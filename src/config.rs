@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::collections::HashMap;
 
 fn default_title_bar_height() -> i32 { 24 }
 fn default_border_width() -> i32 { 1 }
@@ -29,14 +28,20 @@ fn default_vrr() -> bool { false }
 
 fn default_mod_key() -> String { "alt".to_string() }
 
-fn default_keybinds() -> HashMap<String, String> {
-    let mut m = HashMap::new();
-    m.insert("exit".to_string(), "ctrl+alt+q".to_string());
-    m.insert("launch_terminal".to_string(), "mod+Return".to_string());
-    m.insert("focus_next".to_string(), "mod+j".to_string());
-    m.insert("focus_prev".to_string(), "mod+k".to_string());
-    m.insert("close_window".to_string(), "mod+shift+q".to_string());
-    m
+fn default_bindings() -> Vec<KeybindEntry> {
+    vec![
+        KeybindEntry { key: "ctrl+alt+q".to_string(), action: "exit".to_string() },
+        KeybindEntry { key: "mod+Return".to_string(), action: "exec foot".to_string() },
+        KeybindEntry { key: "mod+j".to_string(), action: "focus_next".to_string() },
+        KeybindEntry { key: "mod+k".to_string(), action: "focus_prev".to_string() },
+        KeybindEntry { key: "mod+shift+q".to_string(), action: "close_window".to_string() },
+    ]
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct KeybindEntry {
+    pub key: String,
+    pub action: String,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -172,15 +177,15 @@ pub struct KeybindsConfig {
     #[serde(default = "default_mod_key")]
     pub mod_key: String,
     
-    #[serde(flatten, default = "default_keybinds")]
-    pub bindings: HashMap<String, String>,
+    #[serde(default = "default_bindings")]
+    pub bind: Vec<KeybindEntry>,
 }
 
 impl Default for KeybindsConfig {
     fn default() -> Self {
         Self {
             mod_key: default_mod_key(),
-            bindings: default_keybinds(),
+            bind: default_bindings(),
         }
     }
 }
@@ -225,15 +230,10 @@ impl KeybindsConfig {
         Some(Keybind { ctrl, alt, shift, super_key, keysym })
     }
     
-    #[allow(dead_code)]
-    pub fn get_binding(&self, action: &str) -> Option<Keybind> {
-        self.bindings.get(action).and_then(|s| self.parse_keybind(s))
-    }
-    
     pub fn get_all_bindings(&self) -> Vec<(String, Keybind)> {
-        self.bindings.iter()
-            .filter_map(|(action, bind_str)| {
-                self.parse_keybind(bind_str).map(|kb| (action.clone(), kb))
+        self.bind.iter()
+            .filter_map(|entry| {
+                self.parse_keybind(&entry.key).map(|kb| (entry.action.clone(), kb))
             })
             .collect()
     }
