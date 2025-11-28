@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use std::os::fd::{OwnedFd, AsRawFd, FromRawFd};
+use std::os::fd::{OwnedFd, AsFd, AsRawFd, FromRawFd};
 use wayland_server::{Dispatch, GlobalDispatch, Resource};
 use wayland_protocols::wp::linux_dmabuf::zv1::server::{
     zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
