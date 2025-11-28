@@ -12,6 +12,7 @@ use crate::state::State;
 pub struct DmaBufGlobal;
 
 pub struct DmaBufFeedbackData {
+    #[allow(dead_code)]
     pub for_surface: bool,
 }
 
@@ -157,7 +158,7 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
         }
     };
     
-    feedback.format_table(fd.as_raw_fd(), table_size as u32);
+    feedback.format_table(fd.as_fd(), table_size as u32);
     
     let dev = if let Some(ref renderer) = state.gpu_renderer {
         renderer.drm_dev()

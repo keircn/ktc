@@ -688,7 +688,6 @@ impl GpuRenderer {
     }
     
     pub fn drm_dev(&self) -> u64 {
-        use std::os::unix::fs::MetadataExt;
         use std::os::fd::AsRawFd;
         
         let fd = self.drm_card.as_fd().as_raw_fd();
