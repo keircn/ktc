@@ -1,7 +1,7 @@
 use log::{Level, LevelFilter, Metadata, Record};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use chrono::Local;
 
@@ -43,7 +43,7 @@ impl FileLogger {
         Ok(())
     }
     
-    fn open_log_file(log_dir: &PathBuf, session_num: u32, suffix: &str) -> Result<File, Box<dyn std::error::Error>> {
+    fn open_log_file(log_dir: &Path, session_num: u32, suffix: &str) -> Result<File, Box<dyn std::error::Error>> {
         let path = log_dir.join(format!("session-{}.{}.log", session_num, suffix));
         let file = OpenOptions::new()
             .create(true)
