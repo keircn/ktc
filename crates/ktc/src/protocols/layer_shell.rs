@@ -95,6 +95,7 @@ impl Dispatch<ZwlrLayerShellV1, ()> for State {
                     geometry: Rectangle::default(),
                     desired_width: 0,
                     desired_height: 0,
+                    configured: false,
                     mapped: false,
                     buffer: None,
                     pending_buffer: None,
@@ -242,6 +243,7 @@ impl State {
 
         if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
             ls.geometry = Rectangle { x, y, width, height };
+            ls.configured = true;
         }
 
         let serial = self.next_keyboard_serial();

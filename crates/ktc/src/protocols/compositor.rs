@@ -73,10 +73,12 @@ impl Dispatch<WlSurface, ()> for State {
                     window.mapped = window.buffer.is_some();
                     state.mark_surface_damage(surface_id.clone());
                 } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
-                    let needs_configure = {
+                    let (needs_initial_configure, needs_map) = {
                         let ls = state.layer_surfaces.iter_mut()
                             .find(|ls| ls.wl_surface.id() == surface_id);
                         if let Some(ls) = ls {
+                            let needs_initial = !ls.configured;
+                            
                             if ls.pending_buffer_set {
                                 ls.buffer = ls.pending_buffer.take();
                                 ls.pending_buffer_set = false;
@@ -84,14 +86,18 @@ impl Dispatch<WlSurface, ()> for State {
                             let was_mapped = ls.mapped;
                             ls.mapped = ls.buffer.is_some();
                             ls.needs_redraw = true;
-                            !was_mapped && ls.mapped
+                            (needs_initial, !was_mapped && ls.mapped)
                         } else {
-                            false
+                            (false, false)
                         }
                     };
                     
-                    if needs_configure {
+                    if needs_initial_configure {
                         state.configure_layer_surface(surface_id.clone());
+                    }
+                    
+                    if needs_map {
+                        state.damage_tracker.mark_full_damage();
                     }
                     state.mark_layer_surface_damage(surface_id);
                 }

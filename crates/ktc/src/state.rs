@@ -623,6 +623,7 @@ pub struct LayerSurface {
     pub geometry: Rectangle,
     pub desired_width: u32,
     pub desired_height: u32,
+    pub configured: bool,
     pub mapped: bool,
     pub buffer: Option<WlBuffer>,
     pub pending_buffer: Option<WlBuffer>,

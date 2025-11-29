@@ -729,6 +729,59 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             }
         }
         
+        let layer_surfaces_needing_update: Vec<_> = state.layer_surfaces.iter()
+            .filter(|ls| ls.mapped && ls.buffer.is_some() && ls.needs_redraw)
+            .map(|ls| ls.id)
+            .collect();
+        
+        for id in &layer_surfaces_needing_update {
+            state.update_layer_surface_pixel_cache(*id);
+        }
+        
+        let layer_render_info: Vec<_> = state.layer_surfaces.iter()
+            .filter(|ls| ls.mapped && ls.buffer.is_some())
+            .map(|ls| {
+                let buffer_id = ls.buffer.as_ref().map(|b| b.id());
+                (ls.id, ls.geometry, ls.cache_width, ls.cache_height, ls.cache_stride, buffer_id)
+            })
+            .collect();
+        
+        for (id, geom, cache_w, cache_h, cache_stride, _buffer_id) in &layer_render_info {
+            let ls = match state.layer_surfaces.iter().find(|ls| ls.id == *id) {
+                Some(ls) if !ls.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => ls,
+                _ => continue,
+            };
+            
+            let data: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    ls.pixel_cache.as_ptr() as *const u8,
+                    ls.pixel_cache.len() * 4,
+                )
+            };
+            
+            let texture_id = *id + 1_000_000;
+            let gpu = state.gpu_renderer.as_mut().unwrap();
+            let texture = gpu.upload_shm_texture(texture_id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
+            
+            let gpu = state.gpu_renderer.as_mut().unwrap();
+            gpu.draw_texture(
+                texture,
+                geom.x,
+                geom.y,
+                *cache_w as i32,
+                *cache_h as i32,
+            );
+        }
+        
+        for id in &layer_surfaces_needing_update {
+            if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
+                ls.needs_redraw = false;
+                if let Some(ref buffer) = ls.buffer {
+                    buffer.release();
+                }
+            }
+        }
+        
         if let Some(stats) = profiler_stats {
             let gpu = state.gpu_renderer.as_mut().unwrap();
             gpu.draw_profiler(stats);
@@ -853,6 +906,46 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                     win.needs_redraw = false;
                     if let Some(ref buffer) = win.buffer {
+                        buffer.release();
+                    }
+                }
+            }
+            
+            let layer_surfaces_to_render: Vec<_> = state.layer_surfaces.iter()
+                .filter(|ls| ls.mapped && ls.buffer.is_some())
+                .map(|ls| ls.id)
+                .collect();
+            
+            for id in &layer_surfaces_to_render {
+                state.update_layer_surface_pixel_cache(*id);
+            }
+            
+            for id in &layer_surfaces_to_render {
+                if let Some(ls) = state.layer_surfaces.iter().find(|ls| ls.id == *id) {
+                    if ls.cache_width > 0 && ls.cache_height > 0 {
+                        let render_width = (ls.cache_width as i32).min(ls.geometry.width);
+                        let render_height = (ls.cache_height as i32).min(ls.geometry.height);
+                        
+                        if render_width <= 0 || render_height <= 0 {
+                            continue;
+                        }
+                        
+                        state.canvas.blit_fast(
+                            &ls.pixel_cache,
+                            render_width as usize,
+                            render_height as usize,
+                            ls.cache_stride,
+                            ls.geometry.x,
+                            ls.geometry.y
+                        );
+                    }
+                }
+            }
+            
+            for id in &layer_surfaces_to_render {
+                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
+                    ls.needs_redraw = false;
+                    if let Some(ref buffer) = ls.buffer {
                         buffer.release();
                     }
                 }
