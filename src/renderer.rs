@@ -700,6 +700,18 @@ impl GpuRenderer {
         }
     }
     
+    pub fn render_node_dev(&self) -> u64 {
+        if let Ok(meta) = std::fs::metadata("/dev/dri/renderD128") {
+            use std::os::unix::fs::MetadataExt;
+            return meta.rdev();
+        }
+        if let Ok(meta) = std::fs::metadata("/dev/dri/renderD129") {
+            use std::os::unix::fs::MetadataExt;
+            return meta.rdev();
+        }
+        self.drm_dev()
+    }
+    
     pub fn read_pixels(&self, x: i32, y: i32, width: i32, height: i32) -> Vec<u32> {
         let mut pixels = vec![0u32; (width * height) as usize];
         unsafe {

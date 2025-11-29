@@ -160,22 +160,30 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
     
     feedback.format_table(fd.as_fd(), table_size as u32);
     
-    let dev = if let Some(ref renderer) = state.gpu_renderer {
-        renderer.drm_dev()
+    let (main_dev, scanout_dev) = if let Some(ref renderer) = state.gpu_renderer {
+        (renderer.render_node_dev(), renderer.drm_dev())
     } else {
-        match std::fs::metadata("/dev/dri/card0") {
-            Ok(meta) => {
+        let render_dev = std::fs::metadata("/dev/dri/renderD128")
+            .or_else(|_| std::fs::metadata("/dev/dri/renderD129"))
+            .map(|m| {
                 use std::os::unix::fs::MetadataExt;
-                meta.rdev()
-            }
-            Err(_) => 0,
-        }
+                m.rdev()
+            })
+            .unwrap_or(0);
+        let card_dev = std::fs::metadata("/dev/dri/card0")
+            .map(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.rdev()
+            })
+            .unwrap_or(0);
+        (render_dev, card_dev)
     };
     
-    let dev_bytes = dev.to_ne_bytes();
-    feedback.main_device(dev_bytes.to_vec());
+    let main_dev_bytes = main_dev.to_ne_bytes();
+    feedback.main_device(main_dev_bytes.to_vec());
     
-    feedback.tranche_target_device(dev_bytes.to_vec());
+    let scanout_dev_bytes = scanout_dev.to_ne_bytes();
+    feedback.tranche_target_device(scanout_dev_bytes.to_vec());
     feedback.tranche_flags(zwp_linux_dmabuf_feedback_v1::TrancheFlags::Scanout);
     
     let indices: Vec<u8> = (0..formats.len() as u16)
