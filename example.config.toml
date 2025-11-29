@@ -62,31 +62,175 @@ size = 24
 
 [keybinds]
 # Modifier key: "alt", "super", "ctrl"
+# Use "mod" in keybindings to refer to this key
 mod_key = "alt"
 
-# Keybinds use [[keybinds.bind]] format with key and action
-# Actions: exit, focus_next, focus_prev, close_window, exec <command>,
-#          workspace <n>, move_to_workspace <n>
+# ============================================================================
+# KEYBIND FORMAT
+# ============================================================================
+# key = "modifier+modifier+key"
+# 
+# Modifiers:
+#   mod      - The configured mod_key (alt by default)
+#   alt      - Alt key
+#   ctrl     - Control key
+#   shift    - Shift key
+#   super    - Super/Win/Meta/Logo key (also: mod4, logo, win, meta)
+#
+# Keys:
+#   a-z, 0-9, Return/Enter, Escape/Esc, Tab, Space, Backspace, Delete, Insert
+#   Home, End, PageUp/PgUp, PageDown/PgDn, Left, Right, Up, Down
+#   F1-F12, minus, equal, bracketleft, bracketright, semicolon, apostrophe
+#   grave/backtick, backslash, comma, period, slash
+#   Print/PrintScreen, ScrollLock, Pause, NumLock, CapsLock
+#   KP_0-KP_9, KP_Enter, KP_Add, KP_Subtract, KP_Multiply, KP_Divide
+#   VolumeUp, VolumeDown, Mute, Play, Stop, Prev_Track, Next_Track
+#   BrightnessUp, BrightnessDown
+#
+# ============================================================================
+# AVAILABLE ACTIONS
+# ============================================================================
+# Compositor:
+#   exit                    - Exit the compositor
+#   reload                  - Reload configuration
+#
+# Window Commands:
+#   close                   - Close focused window (sends close request)
+#   kill                    - Kill focused window (forceful)
+#
+# Focus:
+#   focus next              - Focus next window
+#   focus prev              - Focus previous window  
+#   focus left              - Focus window to the left
+#   focus right             - Focus window to the right
+#   focus up                - Focus window above
+#   focus down              - Focus window below
+#
+# Window Movement:
+#   move next               - Swap window with next
+#   move prev               - Swap window with previous
+#   swap left/right/up/down - Swap window in direction
+#
+# Window States:
+#   fullscreen              - Toggle fullscreen (or: fullscreen toggle/on/off)
+#   floating                - Toggle floating (or: floating toggle/on/off)
+#   maximize                - Toggle maximize (or: maximize toggle/on/off)
+#
+# Resize:
+#   resize grow 10          - Grow window by 10 pixels
+#   resize shrink 10        - Shrink window by 10 pixels
+#   resize right 20         - Expand window right by 20 pixels
+#   resize left 20          - Expand window left by 20 pixels
+#   resize up 20            - Expand window up by 20 pixels
+#   resize down 20          - Expand window down by 20 pixels
+#
+# Workspaces:
+#   workspace 1-9           - Switch to workspace N
+#   workspace next          - Switch to next workspace
+#   workspace prev          - Switch to previous workspace
+#   workspace empty         - Switch to first empty workspace
+#   move_to_workspace 1-9   - Move window to workspace N (and follow)
+#   move_to_workspace_silent 1-9 - Move window to workspace N (stay)
+#
+# Commands:
+#   exec <command>          - Execute a command
+#
+# ============================================================================
 
+# Compositor control
 [[keybinds.bind]]
 key = "ctrl+alt+q"
 action = "exit"
 
 [[keybinds.bind]]
+key = "mod+shift+c"
+action = "reload"
+
+# Application launchers
+[[keybinds.bind]]
 key = "mod+Return"
 action = "exec foot"
 
 [[keybinds.bind]]
+key = "mod+d"
+action = "exec fuzzel"
+
+# Window focus
+[[keybinds.bind]]
 key = "mod+j"
-action = "focus_next"
+action = "focus next"
 
 [[keybinds.bind]]
 key = "mod+k"
-action = "focus_prev"
+action = "focus prev"
 
 [[keybinds.bind]]
+key = "mod+h"
+action = "focus left"
+
+[[keybinds.bind]]
+key = "mod+l"
+action = "focus right"
+
+# Window movement/swapping
+[[keybinds.bind]]
+key = "mod+shift+j"
+action = "move next"
+
+[[keybinds.bind]]
+key = "mod+shift+k"
+action = "move prev"
+
+[[keybinds.bind]]
+key = "mod+shift+h"
+action = "swap left"
+
+[[keybinds.bind]]
+key = "mod+shift+l"
+action = "swap right"
+
+# Close window
+[[keybinds.bind]]
 key = "mod+shift+q"
-action = "close_window"
+action = "close"
+
+# Window states
+[[keybinds.bind]]
+key = "mod+f"
+action = "fullscreen"
+
+[[keybinds.bind]]
+key = "mod+shift+space"
+action = "floating toggle"
+
+[[keybinds.bind]]
+key = "mod+m"
+action = "maximize"
+
+# Window resize
+[[keybinds.bind]]
+key = "mod+ctrl+h"
+action = "resize left 20"
+
+[[keybinds.bind]]
+key = "mod+ctrl+l"
+action = "resize right 20"
+
+[[keybinds.bind]]
+key = "mod+ctrl+k"
+action = "resize up 20"
+
+[[keybinds.bind]]
+key = "mod+ctrl+j"
+action = "resize down 20"
+
+[[keybinds.bind]]
+key = "mod+minus"
+action = "resize shrink 20"
+
+[[keybinds.bind]]
+key = "mod+equal"
+action = "resize grow 20"
 
 # Workspace switching
 [[keybinds.bind]]
@@ -105,7 +249,40 @@ action = "workspace 3"
 key = "mod+4"
 action = "workspace 4"
 
-# Move window to workspace
+[[keybinds.bind]]
+key = "mod+5"
+action = "workspace 5"
+
+[[keybinds.bind]]
+key = "mod+6"
+action = "workspace 6"
+
+[[keybinds.bind]]
+key = "mod+7"
+action = "workspace 7"
+
+[[keybinds.bind]]
+key = "mod+8"
+action = "workspace 8"
+
+[[keybinds.bind]]
+key = "mod+9"
+action = "workspace 9"
+
+# Workspace navigation
+[[keybinds.bind]]
+key = "mod+bracketright"
+action = "workspace next"
+
+[[keybinds.bind]]
+key = "mod+bracketleft"
+action = "workspace prev"
+
+[[keybinds.bind]]
+key = "mod+grave"
+action = "workspace empty"
+
+# Move window to workspace (follow)
 [[keybinds.bind]]
 key = "mod+shift+1"
 action = "move_to_workspace 1"
@@ -121,6 +298,52 @@ action = "move_to_workspace 3"
 [[keybinds.bind]]
 key = "mod+shift+4"
 action = "move_to_workspace 4"
+
+[[keybinds.bind]]
+key = "mod+shift+5"
+action = "move_to_workspace 5"
+
+[[keybinds.bind]]
+key = "mod+shift+6"
+action = "move_to_workspace 6"
+
+[[keybinds.bind]]
+key = "mod+shift+7"
+action = "move_to_workspace 7"
+
+[[keybinds.bind]]
+key = "mod+shift+8"
+action = "move_to_workspace 8"
+
+[[keybinds.bind]]
+key = "mod+shift+9"
+action = "move_to_workspace 9"
+
+# Move to next/prev workspace
+[[keybinds.bind]]
+key = "mod+shift+bracketright"
+action = "move_to_workspace next"
+
+[[keybinds.bind]]
+key = "mod+shift+bracketleft"
+action = "move_to_workspace prev"
+
+# Move window to workspace silently (stay on current)
+[[keybinds.bind]]
+key = "mod+ctrl+1"
+action = "move_to_workspace_silent 1"
+
+[[keybinds.bind]]
+key = "mod+ctrl+2"
+action = "move_to_workspace_silent 2"
+
+[[keybinds.bind]]
+key = "mod+ctrl+3"
+action = "move_to_workspace_silent 3"
+
+[[keybinds.bind]]
+key = "mod+ctrl+4"
+action = "move_to_workspace_silent 4"
 
 [debug]
 # Show on-screen profiler overlay (FPS, frame time, memory usage)

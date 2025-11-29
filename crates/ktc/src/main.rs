@@ -177,13 +177,11 @@ fn run(config: Config) {
         .to_string_lossy()
         .to_string();
 
-    let keybinds: std::collections::HashMap<String, crate::config::Keybind> = config
-        .keybinds
-        .get_all_bindings()
-        .into_iter()
-        .collect();
+    let keybinds = config.keybinds.get_all_bindings();
     
-
+    for (action, _) in &keybinds {
+        log::debug!("[keybind] Registered action: {:?}", action);
+    }
 
     let input_handler = match InputHandler::new(keybinds) {
         Ok(handler) => {
@@ -432,6 +430,8 @@ fn run(config: Config) {
 }
 
 fn process_input(data: &mut LoopData) {
+    use crate::config::{Action, Direction, ToggleState};
+    
     let handler = match data.input_handler.as_mut() {
         Some(h) => h,
         None => return,
@@ -444,105 +444,180 @@ fn process_input(data: &mut LoopData) {
         return;
     }
     
-    if frame.exit_compositor {
-        session::request_shutdown();
-        return;
-    }
-    
-    if let Some(ref cmd) = frame.exec_command {
-        let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| "/tmp".to_string());
-        
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        if let Some((program, args)) = parts.split_first() {
-            use std::os::unix::process::CommandExt;
-            let mut command = std::process::Command::new(program);
-            command
-                .args(args)
-                .env("WAYLAND_DISPLAY", &data.socket_name)
-                .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-                .stderr(std::process::Stdio::null());
-            
-            unsafe {
-                command.pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                });
+    for action in &frame.actions {
+        match action {
+            Action::Exit => {
+                session::request_shutdown();
+                return;
             }
             
-            match command.spawn() {
-                Ok(child) => {
-                    session::register_child(child.id());
-                    log::info!("Launched: {}", cmd);
+            Action::Reload => {
+                let new_config = Config::load();
+                data.state.config = new_config;
+                log::info!("Configuration reloaded");
+            }
+            
+            Action::Exec(cmd) | Action::ExecSpawn(cmd) => {
+                spawn_command(cmd, &data.socket_name);
+            }
+            
+            Action::Close => {
+                if let Some(focused_id) = data.state.focused_window {
+                    data.state.close_window(focused_id);
+                    data.display.flush_clients().ok();
                 }
-                Err(e) => {
-                    log::error!("Failed to launch '{}': {}", cmd, e);
+            }
+            
+            Action::Kill => {
+                if let Some(focused_id) = data.state.focused_window {
+                    data.state.close_window(focused_id);
+                    data.display.flush_clients().ok();
                 }
             }
-        }
-    }
-    
-    if frame.focus_next {
-        let old_focus = data.state.focused_window;
-        data.state.focus_next();
-        if data.state.focused_window != old_focus {
-            if let Some(ref mut ipc) = data.ipc_server {
-                let focused_title = data.state.focused_window
-                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
-                    .map(|w| w.title.clone());
-                ipc.notify_focus_change(focused_title);
+            
+            Action::Focus(direction) => {
+                let old_focus = data.state.focused_window;
+                match direction {
+                    Direction::Next | Direction::Right | Direction::Down => {
+                        data.state.focus_next();
+                    }
+                    Direction::Prev | Direction::Left | Direction::Up => {
+                        data.state.focus_prev();
+                    }
+                }
+                if data.state.focused_window != old_focus {
+                    if let Some(ref mut ipc) = data.ipc_server {
+                        let focused_title = data.state.focused_window
+                            .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                            .map(|w| w.title.clone());
+                        ipc.notify_focus_change(focused_title);
+                    }
+                }
+                data.display.flush_clients().ok();
+            }
+            
+            Action::Move(direction) | Action::Swap(direction) => {
+                let old_focus = data.state.focused_window;
+                match direction {
+                    Direction::Next | Direction::Right | Direction::Down => {
+                        data.state.swap_window_next();
+                    }
+                    Direction::Prev | Direction::Left | Direction::Up => {
+                        data.state.swap_window_prev();
+                    }
+                }
+                if data.state.focused_window != old_focus {
+                    if let Some(ref mut ipc) = data.ipc_server {
+                        let focused_title = data.state.focused_window
+                            .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                            .map(|w| w.title.clone());
+                        ipc.notify_focus_change(focused_title);
+                    }
+                }
+                data.display.flush_clients().ok();
+            }
+            
+            Action::Fullscreen(toggle) => {
+                if let Some(focused_id) = data.state.focused_window {
+                    match toggle {
+                        ToggleState::Toggle => data.state.toggle_fullscreen(focused_id),
+                        ToggleState::On => data.state.set_fullscreen(focused_id, true),
+                        ToggleState::Off => data.state.set_fullscreen(focused_id, false),
+                    }
+                    data.display.flush_clients().ok();
+                }
+            }
+            
+            Action::Floating(toggle) => {
+                if let Some(focused_id) = data.state.focused_window {
+                    match toggle {
+                        ToggleState::Toggle => data.state.toggle_floating(focused_id),
+                        ToggleState::On => data.state.set_floating(focused_id, true),
+                        ToggleState::Off => data.state.set_floating(focused_id, false),
+                    }
+                    data.display.flush_clients().ok();
+                }
+            }
+            
+            Action::Maximize(toggle) => {
+                if let Some(focused_id) = data.state.focused_window {
+                    match toggle {
+                        ToggleState::Toggle => data.state.toggle_maximize(focused_id),
+                        ToggleState::On => data.state.set_maximize(focused_id, true),
+                        ToggleState::Off => data.state.set_maximize(focused_id, false),
+                    }
+                    data.display.flush_clients().ok();
+                }
+            }
+            
+            Action::Resize { direction, amount } => {
+                if let Some(focused_id) = data.state.focused_window {
+                    data.state.resize_window(focused_id, direction.clone(), *amount);
+                    data.display.flush_clients().ok();
+                }
+            }
+            
+            Action::Workspace(target) => {
+                let workspace = resolve_workspace_target(target, &data.state);
+                if let Some(ws) = workspace {
+                    let old_workspace = data.state.active_workspace;
+                    data.state.switch_workspace(ws);
+                    if data.state.active_workspace != old_workspace {
+                        if let Some(ref mut ipc) = data.ipc_server {
+                            let workspaces = get_workspace_info(&data.state);
+                            ipc.notify_workspace_change(workspaces, data.state.active_workspace);
+                            
+                            let focused_title = data.state.focused_window
+                                .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                                .map(|w| w.title.clone());
+                            ipc.notify_focus_change(focused_title);
+                        }
+                    }
+                    data.display.flush_clients().ok();
+                }
+            }
+            
+            Action::MoveToWorkspace(target) => {
+                if let Some(focused_id) = data.state.focused_window {
+                    let workspace = resolve_workspace_target(target, &data.state);
+                    if let Some(ws) = workspace {
+                        data.state.move_window_to_workspace(focused_id, ws);
+                        data.state.switch_workspace(ws);
+                        if let Some(ref mut ipc) = data.ipc_server {
+                            let workspaces = get_workspace_info(&data.state);
+                            ipc.notify_workspace_change(workspaces, data.state.active_workspace);
+                        }
+                    }
+                }
+                data.display.flush_clients().ok();
+            }
+            
+            Action::MoveToWorkspaceSilent(target) => {
+                if let Some(focused_id) = data.state.focused_window {
+                    let workspace = resolve_workspace_target(target, &data.state);
+                    if let Some(ws) = workspace {
+                        data.state.move_window_to_workspace(focused_id, ws);
+                        if let Some(ref mut ipc) = data.ipc_server {
+                            let workspaces = get_workspace_info(&data.state);
+                            ipc.notify_workspace_change(workspaces, data.state.active_workspace);
+                        }
+                    }
+                }
+                data.display.flush_clients().ok();
+            }
+            
+            Action::SplitHorizontal | Action::SplitVertical | Action::SplitToggle => {
+                log::debug!("Split actions not yet implemented");
+            }
+            
+            Action::LayoutNext | Action::LayoutPrev | Action::LayoutSet(_) => {
+                log::debug!("Layout actions not yet implemented");
+            }
+            
+            Action::CursorTheme(_theme) => {
+                log::debug!("Cursor theme change not yet implemented");
             }
         }
-        data.display.flush_clients().ok();
-    }
-    
-    if frame.focus_prev {
-        let old_focus = data.state.focused_window;
-        data.state.focus_prev();
-        if data.state.focused_window != old_focus {
-            if let Some(ref mut ipc) = data.ipc_server {
-                let focused_title = data.state.focused_window
-                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
-                    .map(|w| w.title.clone());
-                ipc.notify_focus_change(focused_title);
-            }
-        }
-        data.display.flush_clients().ok();
-    }
-    
-    if frame.close_window {
-        if let Some(focused_id) = data.state.focused_window {
-            data.state.close_window(focused_id);
-            data.display.flush_clients().ok();
-        }
-    }
-    
-    if let Some(workspace) = frame.switch_workspace {
-        let old_workspace = data.state.active_workspace;
-        data.state.switch_workspace(workspace);
-        if data.state.active_workspace != old_workspace {
-            if let Some(ref mut ipc) = data.ipc_server {
-                let workspaces = get_workspace_info(&data.state);
-                ipc.notify_workspace_change(workspaces, data.state.active_workspace);
-                
-                let focused_title = data.state.focused_window
-                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
-                    .map(|w| w.title.clone());
-                ipc.notify_focus_change(focused_title);
-            }
-        }
-        data.display.flush_clients().ok();
-    }
-    
-    if let Some(workspace) = frame.move_to_workspace {
-        if let Some(focused_id) = data.state.focused_window {
-            data.state.move_window_to_workspace(focused_id, workspace);
-            if let Some(ref mut ipc) = data.ipc_server {
-                let workspaces = get_workspace_info(&data.state);
-                ipc.notify_workspace_change(workspaces, data.state.active_workspace);
-            }
-        }
-        data.display.flush_clients().ok();
     }
     
     if frame.pointer.has_motion {
@@ -596,6 +671,74 @@ fn process_input(data: &mut LoopData) {
     }
     
     data.display.flush_clients().ok();
+}
+
+fn resolve_workspace_target(target: &crate::config::WorkspaceTarget, state: &State) -> Option<usize> {
+    use crate::config::WorkspaceTarget;
+    
+    match target {
+        WorkspaceTarget::Number(n) => Some(*n),
+        WorkspaceTarget::Next => {
+            let next = state.active_workspace + 1;
+            if next <= state.workspace_count {
+                Some(next)
+            } else {
+                Some(1)
+            }
+        }
+        WorkspaceTarget::Prev => {
+            if state.active_workspace > 1 {
+                Some(state.active_workspace - 1)
+            } else {
+                Some(state.workspace_count)
+            }
+        }
+        WorkspaceTarget::First => Some(1),
+        WorkspaceTarget::Last => Some(state.workspace_count),
+        WorkspaceTarget::Empty => {
+            for ws in 1..=state.workspace_count {
+                let has_windows = state.windows.iter()
+                    .any(|w| w.workspace == ws && w.mapped);
+                if !has_windows {
+                    return Some(ws);
+                }
+            }
+            None
+        }
+    }
+}
+
+fn spawn_command(cmd: &str, socket_name: &str) {
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| "/tmp".to_string());
+    
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if let Some((program, args)) = parts.split_first() {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new(program);
+        command
+            .args(args)
+            .env("WAYLAND_DISPLAY", socket_name)
+            .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+            .stderr(std::process::Stdio::null());
+        
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        
+        match command.spawn() {
+            Ok(child) => {
+                session::register_child(child.id());
+                log::info!("Launched: {}", cmd);
+            }
+            Err(e) => {
+                log::error!("Failed to launch '{}': {}", cmd, e);
+            }
+        }
+    }
 }
 
 fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>, profiler_stats: Option<&renderer::ProfilerStats>) {

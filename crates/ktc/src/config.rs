@@ -34,18 +34,306 @@ fn default_bindings() -> Vec<KeybindEntry> {
     vec![
         KeybindEntry { key: "ctrl+alt+q".to_string(), action: "exit".to_string() },
         KeybindEntry { key: "mod+Return".to_string(), action: "exec foot".to_string() },
-        KeybindEntry { key: "mod+j".to_string(), action: "focus_next".to_string() },
-        KeybindEntry { key: "mod+k".to_string(), action: "focus_prev".to_string() },
-        KeybindEntry { key: "mod+shift+q".to_string(), action: "close_window".to_string() },
+        KeybindEntry { key: "mod+d".to_string(), action: "exec fuzzel".to_string() },
+        KeybindEntry { key: "mod+j".to_string(), action: "focus next".to_string() },
+        KeybindEntry { key: "mod+k".to_string(), action: "focus prev".to_string() },
+        KeybindEntry { key: "mod+h".to_string(), action: "focus left".to_string() },
+        KeybindEntry { key: "mod+l".to_string(), action: "focus right".to_string() },
+        KeybindEntry { key: "mod+shift+j".to_string(), action: "move next".to_string() },
+        KeybindEntry { key: "mod+shift+k".to_string(), action: "move prev".to_string() },
+        KeybindEntry { key: "mod+shift+q".to_string(), action: "close".to_string() },
+        KeybindEntry { key: "mod+f".to_string(), action: "fullscreen".to_string() },
+        KeybindEntry { key: "mod+shift+space".to_string(), action: "floating toggle".to_string() },
         KeybindEntry { key: "mod+1".to_string(), action: "workspace 1".to_string() },
         KeybindEntry { key: "mod+2".to_string(), action: "workspace 2".to_string() },
         KeybindEntry { key: "mod+3".to_string(), action: "workspace 3".to_string() },
         KeybindEntry { key: "mod+4".to_string(), action: "workspace 4".to_string() },
+        KeybindEntry { key: "mod+5".to_string(), action: "workspace 5".to_string() },
+        KeybindEntry { key: "mod+6".to_string(), action: "workspace 6".to_string() },
+        KeybindEntry { key: "mod+7".to_string(), action: "workspace 7".to_string() },
+        KeybindEntry { key: "mod+8".to_string(), action: "workspace 8".to_string() },
+        KeybindEntry { key: "mod+9".to_string(), action: "workspace 9".to_string() },
         KeybindEntry { key: "mod+shift+1".to_string(), action: "move_to_workspace 1".to_string() },
         KeybindEntry { key: "mod+shift+2".to_string(), action: "move_to_workspace 2".to_string() },
         KeybindEntry { key: "mod+shift+3".to_string(), action: "move_to_workspace 3".to_string() },
         KeybindEntry { key: "mod+shift+4".to_string(), action: "move_to_workspace 4".to_string() },
+        KeybindEntry { key: "mod+shift+5".to_string(), action: "move_to_workspace 5".to_string() },
+        KeybindEntry { key: "mod+shift+6".to_string(), action: "move_to_workspace 6".to_string() },
+        KeybindEntry { key: "mod+shift+7".to_string(), action: "move_to_workspace 7".to_string() },
+        KeybindEntry { key: "mod+shift+8".to_string(), action: "move_to_workspace 8".to_string() },
+        KeybindEntry { key: "mod+shift+9".to_string(), action: "move_to_workspace 9".to_string() },
+        KeybindEntry { key: "mod+shift+c".to_string(), action: "reload".to_string() },
     ]
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+    Next,
+    Prev,
+}
+
+impl Direction {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "left" | "l" => Some(Direction::Left),
+            "right" | "r" => Some(Direction::Right),
+            "up" | "u" => Some(Direction::Up),
+            "down" | "d" => Some(Direction::Down),
+            "next" | "n" => Some(Direction::Next),
+            "prev" | "previous" | "p" => Some(Direction::Prev),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResizeDirection {
+    Grow,
+    Shrink,
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl ResizeDirection {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "grow" | "+" => Some(ResizeDirection::Grow),
+            "shrink" | "-" => Some(ResizeDirection::Shrink),
+            "left" | "l" => Some(ResizeDirection::Left),
+            "right" | "r" => Some(ResizeDirection::Right),
+            "up" | "u" => Some(ResizeDirection::Up),
+            "down" | "d" => Some(ResizeDirection::Down),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToggleState {
+    On,
+    Off,
+    Toggle,
+}
+
+impl ToggleState {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "on" | "true" | "enable" | "yes" | "1" => Some(ToggleState::On),
+            "off" | "false" | "disable" | "no" | "0" => Some(ToggleState::Off),
+            "toggle" | "t" => Some(ToggleState::Toggle),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkspaceTarget {
+    Number(usize),
+    Next,
+    Prev,
+    First,
+    Last,
+    Empty,
+}
+
+impl WorkspaceTarget {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "next" | "n" | "+1" => Some(WorkspaceTarget::Next),
+            "prev" | "previous" | "p" | "-1" => Some(WorkspaceTarget::Prev),
+            "first" | "1st" => Some(WorkspaceTarget::First),
+            "last" => Some(WorkspaceTarget::Last),
+            "empty" | "e" => Some(WorkspaceTarget::Empty),
+            s => s.parse::<usize>().ok().map(WorkspaceTarget::Number),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Exit,
+    Reload,
+    
+    Exec(String),
+    ExecSpawn(String),
+    
+    Close,
+    Kill,
+    
+    Focus(Direction),
+    Move(Direction),
+    Swap(Direction),
+    
+    Fullscreen(ToggleState),
+    Floating(ToggleState),
+    Maximize(ToggleState),
+    
+    Resize { direction: ResizeDirection, amount: i32 },
+    
+    Workspace(WorkspaceTarget),
+    MoveToWorkspace(WorkspaceTarget),
+    MoveToWorkspaceSilent(WorkspaceTarget),
+    
+    SplitHorizontal,
+    SplitVertical,
+    SplitToggle,
+    
+    LayoutNext,
+    LayoutPrev,
+    LayoutSet(String),
+    
+    CursorTheme(String),
+}
+
+impl Action {
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        let (cmd, args) = match s.find(' ') {
+            Some(i) => (s[..i].trim(), s[i+1..].trim()),
+            None => (s, ""),
+        };
+        
+        match cmd.to_lowercase().as_str() {
+            "exit" | "quit" => Some(Action::Exit),
+            "reload" | "reload_config" => Some(Action::Reload),
+            
+            "exec" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    Some(Action::Exec(args.to_string()))
+                }
+            }
+            "exec_spawn" | "spawn" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    Some(Action::ExecSpawn(args.to_string()))
+                }
+            }
+            
+            "close" | "close_window" => Some(Action::Close),
+            "kill" | "kill_window" | "killactive" => Some(Action::Kill),
+            
+            "focus" | "focus_window" => {
+                if args.is_empty() {
+                    Some(Action::Focus(Direction::Next))
+                } else {
+                    Direction::parse(args).map(Action::Focus)
+                }
+            }
+            "focus_next" => Some(Action::Focus(Direction::Next)),
+            "focus_prev" => Some(Action::Focus(Direction::Prev)),
+            
+            "move" | "move_window" | "movewindow" => {
+                if args.is_empty() {
+                    Some(Action::Move(Direction::Next))
+                } else {
+                    Direction::parse(args).map(Action::Move)
+                }
+            }
+            
+            "swap" | "swap_window" | "swapwindow" => {
+                if args.is_empty() {
+                    Some(Action::Swap(Direction::Next))
+                } else {
+                    Direction::parse(args).map(Action::Swap)
+                }
+            }
+            
+            "fullscreen" | "togglefullscreen" => {
+                if args.is_empty() {
+                    Some(Action::Fullscreen(ToggleState::Toggle))
+                } else {
+                    ToggleState::parse(args).map(Action::Fullscreen)
+                }
+            }
+            
+            "floating" | "togglefloating" => {
+                if args.is_empty() {
+                    Some(Action::Floating(ToggleState::Toggle))
+                } else {
+                    ToggleState::parse(args).map(Action::Floating)
+                }
+            }
+            
+            "maximize" | "togglemaximize" => {
+                if args.is_empty() {
+                    Some(Action::Maximize(ToggleState::Toggle))
+                } else {
+                    ToggleState::parse(args).map(Action::Maximize)
+                }
+            }
+            
+            "resize" | "resizeactive" => {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let dir = ResizeDirection::parse(parts[0])?;
+                    let amount = parts[1].parse().unwrap_or(10);
+                    Some(Action::Resize { direction: dir, amount })
+                } else if parts.len() == 1 {
+                    let dir = ResizeDirection::parse(parts[0])?;
+                    Some(Action::Resize { direction: dir, amount: 10 })
+                } else {
+                    None
+                }
+            }
+            
+            "workspace" | "switch_workspace" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    WorkspaceTarget::parse(args).map(Action::Workspace)
+                }
+            }
+            
+            "move_to_workspace" | "movetoworkspace" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    WorkspaceTarget::parse(args).map(Action::MoveToWorkspace)
+                }
+            }
+            
+            "move_to_workspace_silent" | "movetoworkspacesilent" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    WorkspaceTarget::parse(args).map(Action::MoveToWorkspaceSilent)
+                }
+            }
+            
+            "split_horizontal" | "splith" => Some(Action::SplitHorizontal),
+            "split_vertical" | "splitv" => Some(Action::SplitVertical),
+            "split_toggle" | "splitt" => Some(Action::SplitToggle),
+            
+            "layout_next" | "layout" if args == "next" => Some(Action::LayoutNext),
+            "layout_prev" | "layout" if args == "prev" => Some(Action::LayoutPrev),
+            "layout_set" | "layout" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    Some(Action::LayoutSet(args.to_string()))
+                }
+            }
+            
+            "cursor_theme" | "setcursor" => {
+                if args.is_empty() {
+                    None
+                } else {
+                    Some(Action::CursorTheme(args.to_string()))
+                }
+            }
+            
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -227,11 +515,11 @@ impl KeybindsConfig {
                 "ctrl" | "control" => ctrl = true,
                 "alt" => alt = true,
                 "shift" => shift = true,
-                "super" | "mod4" | "logo" => super_key = true,
+                "super" | "mod4" | "logo" | "win" | "meta" => super_key = true,
                 "mod" => {
                     match self.mod_key.to_lowercase().as_str() {
                         "alt" => alt = true,
-                        "super" | "mod4" | "logo" => super_key = true,
+                        "super" | "mod4" | "logo" | "win" | "meta" => super_key = true,
                         "ctrl" | "control" => ctrl = true,
                         _ => alt = true,
                     }
@@ -244,7 +532,17 @@ impl KeybindsConfig {
         Some(Keybind { ctrl, alt, shift, super_key, keysym })
     }
     
-    pub fn get_all_bindings(&self) -> Vec<(String, Keybind)> {
+    pub fn get_all_bindings(&self) -> Vec<(Action, Keybind)> {
+        self.bind.iter()
+            .filter_map(|entry| {
+                let keybind = self.parse_keybind(&entry.key)?;
+                let action = Action::parse(&entry.action)?;
+                Some((action, keybind))
+            })
+            .collect()
+    }
+    
+    pub fn get_all_bindings_raw(&self) -> Vec<(String, Keybind)> {
         self.bind.iter()
             .filter_map(|entry| {
                 self.parse_keybind(&entry.key).map(|kb| (entry.action.clone(), kb))
@@ -293,17 +591,17 @@ fn keysym_from_name(name: &str) -> Option<u32> {
         "7" => KEY_7,
         "8" => KEY_8,
         "9" => KEY_9,
-        "return" | "enter" => KEY_Return,
+        "return" | "enter" | "ret" => KEY_Return,
         "escape" | "esc" => KEY_Escape,
         "tab" => KEY_Tab,
-        "space" => KEY_space,
-        "backspace" => KEY_BackSpace,
-        "delete" => KEY_Delete,
-        "insert" => KEY_Insert,
+        "space" | "spc" => KEY_space,
+        "backspace" | "bksp" => KEY_BackSpace,
+        "delete" | "del" => KEY_Delete,
+        "insert" | "ins" => KEY_Insert,
         "home" => KEY_Home,
         "end" => KEY_End,
-        "pageup" | "page_up" => KEY_Page_Up,
-        "pagedown" | "page_down" => KEY_Page_Down,
+        "pageup" | "page_up" | "pgup" | "prior" => KEY_Page_Up,
+        "pagedown" | "page_down" | "pgdn" | "next" => KEY_Page_Down,
         "left" => KEY_Left,
         "right" => KEY_Right,
         "up" => KEY_Up,
@@ -321,16 +619,47 @@ fn keysym_from_name(name: &str) -> Option<u32> {
         "f11" => KEY_F11,
         "f12" => KEY_F12,
         "minus" | "-" => KEY_minus,
-        "equal" | "=" => KEY_equal,
-        "bracketleft" | "[" => KEY_bracketleft,
-        "bracketright" | "]" => KEY_bracketright,
+        "equal" | "=" | "plus" => KEY_equal,
+        "bracketleft" | "[" | "lbracket" => KEY_bracketleft,
+        "bracketright" | "]" | "rbracket" => KEY_bracketright,
         "semicolon" | ";" => KEY_semicolon,
-        "apostrophe" | "'" => KEY_apostrophe,
-        "grave" | "`" => KEY_grave,
-        "backslash" | "\\" => KEY_backslash,
+        "apostrophe" | "'" | "quote" => KEY_apostrophe,
+        "grave" | "`" | "backtick" | "tilde" => KEY_grave,
+        "backslash" | "\\" | "bslash" => KEY_backslash,
         "comma" | "," => KEY_comma,
-        "period" | "." => KEY_period,
-        "slash" | "/" => KEY_slash,
+        "period" | "." | "dot" => KEY_period,
+        "slash" | "/" | "fslash" => KEY_slash,
+        "print" | "printscreen" | "prtsc" | "sysrq" => KEY_Print,
+        "scrolllock" | "scroll_lock" => KEY_Scroll_Lock,
+        "pause" | "break" => KEY_Pause,
+        "numlock" | "num_lock" => KEY_Num_Lock,
+        "capslock" | "caps_lock" | "caps" => KEY_Caps_Lock,
+        "kp_0" | "kp0" => KEY_KP_0,
+        "kp_1" | "kp1" => KEY_KP_1,
+        "kp_2" | "kp2" => KEY_KP_2,
+        "kp_3" | "kp3" => KEY_KP_3,
+        "kp_4" | "kp4" => KEY_KP_4,
+        "kp_5" | "kp5" => KEY_KP_5,
+        "kp_6" | "kp6" => KEY_KP_6,
+        "kp_7" | "kp7" => KEY_KP_7,
+        "kp_8" | "kp8" => KEY_KP_8,
+        "kp_9" | "kp9" => KEY_KP_9,
+        "kp_enter" | "kpenter" => KEY_KP_Enter,
+        "kp_add" | "kpadd" | "kp_plus" => KEY_KP_Add,
+        "kp_subtract" | "kpsubtract" | "kp_minus" => KEY_KP_Subtract,
+        "kp_multiply" | "kpmultiply" | "kp_asterisk" => KEY_KP_Multiply,
+        "kp_divide" | "kpdivide" | "kp_slash" => KEY_KP_Divide,
+        "kp_decimal" | "kpdecimal" | "kp_period" => KEY_KP_Decimal,
+        "xf86audioraisevolume" | "volumeup" | "vol_up" => KEY_XF86AudioRaiseVolume,
+        "xf86audiolowervolume" | "volumedown" | "vol_down" => KEY_XF86AudioLowerVolume,
+        "xf86audiomute" | "mute" => KEY_XF86AudioMute,
+        "xf86audioplay" | "play" => KEY_XF86AudioPlay,
+        "xf86audiopause" | "pause_media" => KEY_XF86AudioPause,
+        "xf86audiostop" | "stop" => KEY_XF86AudioStop,
+        "xf86audioprev" | "prev_track" => KEY_XF86AudioPrev,
+        "xf86audionext" | "next_track" => KEY_XF86AudioNext,
+        "xf86monbrightnessup" | "brightnessup" | "brightness_up" => KEY_XF86MonBrightnessUp,
+        "xf86monbrightnessdown" | "brightnessdown" | "brightness_down" => KEY_XF86MonBrightnessDown,
         _ => return None,
     })
 }

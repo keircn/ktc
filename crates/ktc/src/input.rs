@@ -10,7 +10,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use xkbcommon::xkb;
 
-use crate::config::Keybind;
+use crate::config::{Action, Keybind};
 
 struct Interface;
 
@@ -117,13 +117,7 @@ pub struct InputFrame {
     pub pointer: PointerState,
     pub buttons: Vec<ButtonEvent>,
     pub keys: Vec<KeyEvent>,
-    pub exit_compositor: bool,
-    pub exec_command: Option<String>,
-    pub focus_next: bool,
-    pub focus_prev: bool,
-    pub close_window: bool,
-    pub switch_workspace: Option<usize>,
-    pub move_to_workspace: Option<usize>,
+    pub actions: Vec<Action>,
 }
 
 impl InputFrame {
@@ -135,13 +129,7 @@ impl InputFrame {
         self.pointer.reset();
         self.buttons.clear();
         self.keys.clear();
-        self.exit_compositor = false;
-        self.exec_command = None;
-        self.focus_next = false;
-        self.focus_prev = false;
-        self.close_window = false;
-        self.switch_workspace = None;
-        self.move_to_workspace = None;
+        self.actions.clear();
     }
 
     pub fn has_events(&self) -> bool {
@@ -149,13 +137,7 @@ impl InputFrame {
             || self.pointer.has_scroll
             || !self.buttons.is_empty()
             || !self.keys.is_empty()
-            || self.exit_compositor
-            || self.exec_command.is_some()
-            || self.focus_next
-            || self.focus_prev
-            || self.close_window
-            || self.switch_workspace.is_some()
-            || self.move_to_workspace.is_some()
+            || !self.actions.is_empty()
     }
 }
 
@@ -168,11 +150,11 @@ pub struct InputHandler {
     shift: bool,
     super_key: bool,
     frame: InputFrame,
-    keybinds: HashMap<String, Keybind>,
+    keybinds: HashMap<Keybind, Action>,
 }
 
 impl InputHandler {
-    pub fn new(keybinds: HashMap<String, Keybind>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(keybinds: Vec<(Action, Keybind)>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut libinput = Libinput::new_with_udev(Interface);
         libinput.udev_assign_seat("seat0")
             .map_err(|_| "Failed to assign udev seat")?;
@@ -203,6 +185,10 @@ impl InputHandler {
         
         let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         
+        let keybind_map: HashMap<Keybind, Action> = keybinds.into_iter()
+            .map(|(action, keybind)| (keybind, action))
+            .collect();
+        
         Ok(InputHandler {
             libinput,
             xkb_context,
@@ -212,7 +198,7 @@ impl InputHandler {
             shift: false,
             super_key: false,
             frame: InputFrame::new(),
-            keybinds,
+            keybinds: keybind_map,
         })
     }
     
@@ -341,40 +327,17 @@ impl InputHandler {
                 let keysym: u32 = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode)).into();
                 let keysym_lower = keysym_to_lower(keysym);
                 
-                for (action, bind) in &self.keybinds {
-                    if bind.keysym == keysym_lower
-                        && bind.ctrl == self.ctrl
-                        && bind.alt == self.alt
-                        && bind.shift == self.shift
-                        && bind.super_key == self.super_key
-                    {
-                        if action == "exit" {
-                            self.frame.exit_compositor = true;
-                            return;
-                        } else if action == "focus_next" {
-                            self.frame.focus_next = true;
-                            return;
-                        } else if action == "focus_prev" {
-                            self.frame.focus_prev = true;
-                            return;
-                        } else if action == "close_window" {
-                            self.frame.close_window = true;
-                            return;
-                        } else if let Some(ws) = action.strip_prefix("workspace ") {
-                            if let Ok(num) = ws.trim().parse::<usize>() {
-                                self.frame.switch_workspace = Some(num);
-                                return;
-                            }
-                        } else if let Some(ws) = action.strip_prefix("move_to_workspace ") {
-                            if let Ok(num) = ws.trim().parse::<usize>() {
-                                self.frame.move_to_workspace = Some(num);
-                                return;
-                            }
-                        } else if let Some(cmd) = action.strip_prefix("exec ") {
-                            self.frame.exec_command = Some(cmd.to_string());
-                            return;
-                        }
-                    }
+                let current_keybind = Keybind {
+                    ctrl: self.ctrl,
+                    alt: self.alt,
+                    shift: self.shift,
+                    super_key: self.super_key,
+                    keysym: keysym_lower,
+                };
+                
+                if let Some(action) = self.keybinds.get(&current_keybind) {
+                    self.frame.actions.push(action.clone());
+                    return;
                 }
             }
             

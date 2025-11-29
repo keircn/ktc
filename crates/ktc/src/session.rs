@@ -103,7 +103,6 @@ impl Drop for Session {
 
 fn setup_signal_handlers() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
-        // Ignore TTY/terminal signals
         libc::signal(libc::SIGINT, libc::SIG_IGN);
         libc::signal(libc::SIGQUIT, libc::SIG_IGN);
         libc::signal(libc::SIGTSTP, libc::SIG_IGN);

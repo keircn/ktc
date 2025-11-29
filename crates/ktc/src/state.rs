@@ -597,6 +597,10 @@ pub struct Window {
     pub cache_stride: usize,
     pub title: String,
     pub workspace: usize,
+    pub fullscreen: bool,
+    pub floating: bool,
+    pub maximized: bool,
+    pub saved_geometry: Option<Rectangle>,
 }
 
 pub type LayerSurfaceId = u64;
@@ -1031,6 +1035,10 @@ impl State {
             cache_stride: 0,
             title: String::new(),
             workspace: self.active_workspace,
+            fullscreen: false,
+            floating: false,
+            maximized: false,
+            saved_geometry: None,
         });
         
         self.damage_tracker.mark_full_damage();
@@ -1040,21 +1048,26 @@ impl State {
     
     pub fn relayout_windows(&mut self) {
         let active_workspace = self.active_workspace;
-        let workspace_window_ids: Vec<WindowId> = self.windows.iter()
+        
+        // Collect tiled windows (non-floating, non-fullscreen, non-maximized)
+        let tiled_window_ids: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.workspace == active_workspace && !w.floating && !w.fullscreen && !w.maximized)
+            .map(|w| w.id)
+            .collect();
+        
+        // Collect all workspace windows for configure events
+        let all_workspace_window_ids: Vec<WindowId> = self.windows.iter()
             .filter(|w| w.workspace == active_workspace)
             .map(|w| w.id)
             .collect();
         
-        let num_windows = workspace_window_ids.len();
-        if num_windows == 0 {
-            return;
-        }
-        
         let (screen_width, screen_height) = self.screen_size();
+        let num_tiled = tiled_window_ids.len();
         
-        for (i, window_id) in workspace_window_ids.iter().enumerate() {
+        // Layout tiled windows
+        for (i, window_id) in tiled_window_ids.iter().enumerate() {
             if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
-                let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
+                let new_geometry = calculate_tiling_geometry(i, num_tiled, screen_width, screen_height);
                 if window.geometry != new_geometry {
                     let old_geom = window.geometry;
                     window.geometry = new_geometry;
@@ -1070,19 +1083,21 @@ impl State {
         
         self.damage_tracker.mark_full_damage();
         
-        for window_id in &workspace_window_ids {
-            let (geometry, xdg_surface, xdg_toplevel) = {
+        // Send configure to all workspace windows
+        for window_id in &all_workspace_window_ids {
+            let (geometry, xdg_surface, xdg_toplevel, is_fullscreen) = {
                 let window = match self.windows.iter().find(|w| w.id == *window_id) {
                     Some(w) => w,
                     None => continue,
                 };
-                (window.geometry, window.xdg_surface.clone(), window.xdg_toplevel.clone())
+                (window.geometry, window.xdg_surface.clone(), window.xdg_toplevel.clone(), window.fullscreen)
             };
             
             let states = self.get_toplevel_states(*window_id);
             let serial = self.next_keyboard_serial();
             
-            let title_bar_height = self.config.title_bar_height();
+            // Fullscreen windows don't have title bar
+            let title_bar_height = if is_fullscreen { 0 } else { self.config.title_bar_height() };
             let client_height = (geometry.height - title_bar_height).max(1);
             xdg_toplevel.configure(geometry.width, client_height, states);
             xdg_surface.configure(serial);
@@ -1105,6 +1120,11 @@ impl State {
     }
     
     pub fn get_toplevel_states(&self, window_id: WindowId) -> Vec<u8> {
+        let window = match self.windows.iter().find(|w| w.id == window_id) {
+            Some(w) => w,
+            None => return vec![],
+        };
+        
         let num_windows = self.windows.len();
         let window_index = self.windows.iter().position(|w| w.id == window_id);
         let is_focused = self.focused_window == Some(window_id);
@@ -1115,7 +1135,17 @@ impl State {
             states.extend_from_slice(&(ToplevelState::Activated as u32).to_ne_bytes());
         }
         
-        if num_windows >= 2 {
+        if window.fullscreen {
+            states.extend_from_slice(&(ToplevelState::Fullscreen as u32).to_ne_bytes());
+            return states;
+        }
+        
+        if window.maximized {
+            states.extend_from_slice(&(ToplevelState::Maximized as u32).to_ne_bytes());
+            return states;
+        }
+        
+        if !window.floating && num_windows >= 2 {
             if num_windows == 2 {
                 if window_index == Some(0) {
                     states.extend_from_slice(&(ToplevelState::TiledLeft as u32).to_ne_bytes());
@@ -1239,6 +1269,237 @@ impl State {
             self.needs_relayout = true;
             self.damage_tracker.mark_full_damage();
         }
+    }
+    
+    pub fn swap_window_next(&mut self) {
+        let active_workspace = self.active_workspace;
+        let focused_id = match self.focused_window {
+            Some(id) => id,
+            None => return,
+        };
+        
+        let workspace_windows: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.workspace == active_workspace && w.mapped)
+            .map(|w| w.id)
+            .collect();
+        
+        if workspace_windows.len() < 2 {
+            return;
+        }
+        
+        let current_idx = match workspace_windows.iter().position(|&id| id == focused_id) {
+            Some(idx) => idx,
+            None => return,
+        };
+        
+        let next_idx = (current_idx + 1) % workspace_windows.len();
+        let next_id = workspace_windows[next_idx];
+        
+        let (current_pos, next_pos) = {
+            let current = self.windows.iter().position(|w| w.id == focused_id).unwrap();
+            let next = self.windows.iter().position(|w| w.id == next_id).unwrap();
+            (current, next)
+        };
+        
+        self.windows.swap(current_pos, next_pos);
+        self.needs_relayout = true;
+        self.damage_tracker.mark_full_damage();
+    }
+    
+    pub fn swap_window_prev(&mut self) {
+        let active_workspace = self.active_workspace;
+        let focused_id = match self.focused_window {
+            Some(id) => id,
+            None => return,
+        };
+        
+        let workspace_windows: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.workspace == active_workspace && w.mapped)
+            .map(|w| w.id)
+            .collect();
+        
+        if workspace_windows.len() < 2 {
+            return;
+        }
+        
+        let current_idx = match workspace_windows.iter().position(|&id| id == focused_id) {
+            Some(idx) => idx,
+            None => return,
+        };
+        
+        let prev_idx = if current_idx == 0 {
+            workspace_windows.len() - 1
+        } else {
+            current_idx - 1
+        };
+        let prev_id = workspace_windows[prev_idx];
+        
+        let (current_pos, prev_pos) = {
+            let current = self.windows.iter().position(|w| w.id == focused_id).unwrap();
+            let prev = self.windows.iter().position(|w| w.id == prev_id).unwrap();
+            (current, prev)
+        };
+        
+        self.windows.swap(current_pos, prev_pos);
+        self.needs_relayout = true;
+        self.damage_tracker.mark_full_damage();
+    }
+    
+    pub fn toggle_fullscreen(&mut self, window_id: WindowId) {
+        let is_fullscreen = self.windows.iter()
+            .find(|w| w.id == window_id)
+            .map(|w| w.fullscreen)
+            .unwrap_or(false);
+        self.set_fullscreen(window_id, !is_fullscreen);
+    }
+    
+    pub fn set_fullscreen(&mut self, window_id: WindowId, fullscreen: bool) {
+        let (screen_width, screen_height) = self.screen_size();
+        
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            if fullscreen && !window.fullscreen {
+                window.saved_geometry = Some(window.geometry);
+                window.geometry = Rectangle {
+                    x: 0,
+                    y: 0,
+                    width: screen_width,
+                    height: screen_height,
+                };
+                window.fullscreen = true;
+                window.maximized = false;
+            } else if !fullscreen && window.fullscreen {
+                if let Some(saved) = window.saved_geometry.take() {
+                    window.geometry = saved;
+                }
+                window.fullscreen = false;
+            }
+            window.needs_redraw = true;
+            self.damage_tracker.mark_full_damage();
+        }
+        
+        self.send_window_configure(window_id);
+    }
+    
+    pub fn toggle_floating(&mut self, window_id: WindowId) {
+        let is_floating = self.windows.iter()
+            .find(|w| w.id == window_id)
+            .map(|w| w.floating)
+            .unwrap_or(false);
+        self.set_floating(window_id, !is_floating);
+    }
+    
+    pub fn set_floating(&mut self, window_id: WindowId, floating: bool) {
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            if floating && !window.floating {
+                window.floating = true;
+            } else if !floating && window.floating {
+                window.floating = false;
+            }
+            window.needs_redraw = true;
+        }
+        
+        self.needs_relayout = true;
+        self.damage_tracker.mark_full_damage();
+    }
+    
+    pub fn toggle_maximize(&mut self, window_id: WindowId) {
+        let is_maximized = self.windows.iter()
+            .find(|w| w.id == window_id)
+            .map(|w| w.maximized)
+            .unwrap_or(false);
+        self.set_maximize(window_id, !is_maximized);
+    }
+    
+    pub fn set_maximize(&mut self, window_id: WindowId, maximized: bool) {
+        let (screen_width, screen_height) = self.screen_size();
+        
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            if maximized && !window.maximized {
+                window.saved_geometry = Some(window.geometry);
+                window.geometry = Rectangle {
+                    x: 0,
+                    y: 0,
+                    width: screen_width,
+                    height: screen_height,
+                };
+                window.maximized = true;
+                window.fullscreen = false;
+            } else if !maximized && window.maximized {
+                if let Some(saved) = window.saved_geometry.take() {
+                    window.geometry = saved;
+                }
+                window.maximized = false;
+            }
+            window.needs_redraw = true;
+            self.damage_tracker.mark_full_damage();
+        }
+        
+        self.send_window_configure(window_id);
+    }
+    
+    pub fn resize_window(&mut self, window_id: WindowId, direction: crate::config::ResizeDirection, amount: i32) {
+        use crate::config::ResizeDirection;
+        
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            if window.fullscreen || window.maximized {
+                return;
+            }
+            
+            match direction {
+                ResizeDirection::Grow => {
+                    window.geometry.width += amount;
+                    window.geometry.height += amount;
+                }
+                ResizeDirection::Shrink => {
+                    window.geometry.width = (window.geometry.width - amount).max(100);
+                    window.geometry.height = (window.geometry.height - amount).max(100);
+                }
+                ResizeDirection::Right => {
+                    window.geometry.width += amount;
+                }
+                ResizeDirection::Left => {
+                    window.geometry.x -= amount;
+                    window.geometry.width += amount;
+                }
+                ResizeDirection::Down => {
+                    window.geometry.height += amount;
+                }
+                ResizeDirection::Up => {
+                    window.geometry.y -= amount;
+                    window.geometry.height += amount;
+                }
+            }
+            
+            window.geometry.width = window.geometry.width.max(100);
+            window.geometry.height = window.geometry.height.max(100);
+            window.needs_redraw = true;
+            self.damage_tracker.mark_full_damage();
+        }
+        
+        self.send_window_configure(window_id);
+    }
+    
+    fn send_window_configure(&mut self, window_id: WindowId) {
+        let (geometry, xdg_surface, xdg_toplevel) = {
+            let window = match self.windows.iter().find(|w| w.id == window_id) {
+                Some(w) => w,
+                None => return,
+            };
+            (window.geometry, window.xdg_surface.clone(), window.xdg_toplevel.clone())
+        };
+        
+        let states = self.get_toplevel_states(window_id);
+        let serial = self.next_keyboard_serial();
+        
+        let title_bar_height = if self.windows.iter().find(|w| w.id == window_id).map(|w| w.fullscreen).unwrap_or(false) {
+            0
+        } else {
+            self.config.title_bar_height()
+        };
+        
+        let client_height = (geometry.height - title_bar_height).max(1);
+        xdg_toplevel.configure(geometry.width, client_height, states);
+        xdg_surface.configure(serial);
     }
     
     pub fn set_window_title(&mut self, window_id: WindowId, title: String) {
