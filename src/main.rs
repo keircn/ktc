@@ -524,7 +524,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         
         let windows_to_render: Vec<_> = state.windows.iter()
             .filter(|w| w.mapped && !w.pixel_cache.is_empty() && w.cache_width > 0 && w.cache_height > 0)
-            .map(|w| (w.id, w.geometry, w.cache_width, w.cache_height, w.needs_redraw))
+            .map(|w| (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, w.needs_redraw))
             .collect();
         
         let gpu = state.gpu_renderer.as_mut().unwrap();
@@ -540,7 +540,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         ];
         gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
         
-        for (id, geom, cache_w, cache_h, needs_texture_update) in &windows_to_render {
+        for (id, geom, cache_w, cache_h, cache_stride, needs_texture_update) in &windows_to_render {
             let is_focused = focused_id == Some(*id);
             let title_color = if is_focused { title_focused } else { title_unfocused };
             let title_rgba = [
@@ -562,7 +562,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                         )
                     };
                     let gpu = state.gpu_renderer.as_mut().unwrap();
-                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, data)
+                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data)
                 } else {
                     continue;
                 }
@@ -578,7 +578,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                         )
                     };
                     let gpu = state.gpu_renderer.as_mut().unwrap();
-                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, data)
+                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data)
                 } else {
                     continue;
                 }
@@ -603,7 +603,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
         
-        for (id, _, _, _, _) in &windows_to_render {
+        for (id, _, _, _, _, _) in &windows_to_render {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
                 if let Some(ref buffer) = win.buffer {

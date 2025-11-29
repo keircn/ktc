@@ -567,7 +567,7 @@ impl GpuRenderer {
         }
     }
     
-    pub fn upload_shm_texture(&mut self, id: u64, width: u32, height: u32, data: &[u8]) -> glow::Texture {
+    pub fn upload_shm_texture(&mut self, id: u64, width: u32, height: u32, stride: u32, data: &[u8]) -> glow::Texture {
         unsafe {
             let texture = if let Some(&tex) = self.shm_textures.get(&id) {
                 tex
@@ -583,6 +583,8 @@ impl GpuRenderer {
             self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
             self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             
+            self.gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, stride as i32);
+            
             self.gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -594,6 +596,8 @@ impl GpuRenderer {
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(Some(data)),
             );
+            
+            self.gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
             
             texture
         }
@@ -718,7 +722,6 @@ impl GpuRenderer {
             );
         }
         
-        // Flip vertically since OpenGL has origin at bottom-left
         let mut flipped = vec![0u32; pixels.len()];
         for row in 0..height as usize {
             let src_row = (height as usize - 1 - row) * width as usize;
