@@ -60,13 +60,15 @@ Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 ## Roadmap
 
 ### Near-term
+
 - [ ] Multi-output support (output hotplug, layout configuration)
 - [ ] Output configuration apply (resolution/refresh changes via wlr-output-management)
 - [ ] Pointer constraints protocol (for games/3D apps)
 - [ ] Relative pointer protocol (for games/3D apps)
-- [ ] Layer shell protocol (for panels, wallpapers, overlays)
+- [x] Layer shell protocol (for panels, wallpapers, overlays)
 
 ### Medium-term
+
 - [ ] Popup/menu positioning improvements
 - [ ] Clipboard manager (wlr-data-control)
 - [ ] Session lock protocol (screen locking)
@@ -74,6 +76,7 @@ Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 - [ ] Touch input support
 
 ### Long-term
+
 - [ ] XWayland support
 - [ ] Fractional scaling
 - [ ] HDR/color management
