@@ -463,12 +463,22 @@ fn process_input(data: &mut LoopData) {
         
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if let Some((program, args)) = parts.split_first() {
-            match std::process::Command::new(program)
+            use std::os::unix::process::CommandExt;
+            let mut command = std::process::Command::new(program);
+            command
                 .args(args)
                 .env("WAYLAND_DISPLAY", &data.socket_name)
                 .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-                .stderr(std::process::Stdio::null())
-                .spawn() {
+                .stderr(std::process::Stdio::null());
+            
+            unsafe {
+                command.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+            
+            match command.spawn() {
                 Ok(child) => {
                     session::register_child(child.id());
                     log::info!("Launched: {}", cmd);
@@ -1180,6 +1190,7 @@ fn get_workspace_info(state: &State) -> Vec<ktc_common::WorkspaceInfo> {
 
 fn spawn_ktcbar(socket_name: &str) {
     use std::process::{Command, Stdio};
+    use std::os::unix::process::CommandExt;
     
     let ktcbar_path = match which_ktcbar() {
         Some(path) => path,
@@ -1192,13 +1203,21 @@ fn spawn_ktcbar(socket_name: &str) {
     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| "/tmp".to_string());
     
-    match Command::new(&ktcbar_path)
+    let mut command = Command::new(&ktcbar_path);
+    command
         .env("WAYLAND_DISPLAY", socket_name)
         .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    
+    unsafe {
+        command.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    
+    match command.spawn() {
         Ok(child) => {
             session::register_child(child.id());
             log::info!("Started ktcbar (pid {})", child.id());
