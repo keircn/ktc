@@ -470,7 +470,19 @@ fn process_input(data: &mut LoopData) {
             
             Action::Kill => {
                 if let Some(focused_id) = data.state.focused_window {
-                    data.state.close_window(focused_id);
+                    if let Some(client) = data.state.kill_window(focused_id) {
+                        client.kill(
+                            &data.display.handle(),
+                            wayland_server::backend::DisconnectReason::ProtocolError(
+                                wayland_server::backend::protocol::ProtocolError {
+                                    code: 0,
+                                    object_id: wayland_server::backend::ObjectId::null(),
+                                    object_interface: "".to_string(),
+                                    message: "Killed by user".to_string(),
+                                }
+                            )
+                        );
+                    }
                     data.display.flush_clients().ok();
                 }
             }
