@@ -146,6 +146,7 @@ impl IpcServer {
     }
     
     pub fn notify_workspace_change(&mut self, workspaces: Vec<WorkspaceInfo>, active: usize) {
+        log::debug!("[ipc] Broadcasting workspace change: active={} clients={}", active, self.clients.len());
         let event = IpcEvent::WorkspaceChanged {
             workspaces,
             active_workspace: active,

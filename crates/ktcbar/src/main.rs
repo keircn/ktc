@@ -511,6 +511,10 @@ fn main() {
             state.needs_redraw = true;
             last_clock_update = Instant::now();
         }
+        
+        if state.needs_redraw && state.configured {
+            state.draw(&qh);
+        }
 
         if let Err(e) = event_queue.dispatch_pending(&mut state) {
             eprintln!("Dispatch error: {}", e);
