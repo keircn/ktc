@@ -57,18 +57,44 @@ impl Dispatch<WlSurface, ()> for State {
                 if let Some(window) = state.get_window_by_surface(resource) {
                     window.pending_buffer = buffer;
                     window.pending_buffer_set = true;
+                } else if let Some(ls) = state.get_layer_surface_by_wl_surface(resource) {
+                    ls.pending_buffer = buffer;
+                    ls.pending_buffer_set = true;
                 }
             }
             wl_surface::Request::Commit => {
                 let surface_id = resource.id();
+                
                 if let Some(window) = state.get_window_by_surface(resource) {
                     if window.pending_buffer_set {
                         window.buffer = window.pending_buffer.take();
                         window.pending_buffer_set = false;
                     }
                     window.mapped = window.buffer.is_some();
+                    state.mark_surface_damage(surface_id.clone());
+                } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
+                    let needs_configure = {
+                        let ls = state.layer_surfaces.iter_mut()
+                            .find(|ls| ls.wl_surface.id() == surface_id);
+                        if let Some(ls) = ls {
+                            if ls.pending_buffer_set {
+                                ls.buffer = ls.pending_buffer.take();
+                                ls.pending_buffer_set = false;
+                            }
+                            let was_mapped = ls.mapped;
+                            ls.mapped = ls.buffer.is_some();
+                            ls.needs_redraw = true;
+                            !was_mapped && ls.mapped
+                        } else {
+                            false
+                        }
+                    };
+                    
+                    if needs_configure {
+                        state.configure_layer_surface(surface_id.clone());
+                    }
+                    state.mark_layer_surface_damage(surface_id);
                 }
-                state.mark_surface_damage(surface_id);
             }
             wl_surface::Request::Frame { callback } => {
                 let cb = data_init.init(callback, ());
@@ -88,6 +114,16 @@ impl Dispatch<WlSurface, ()> for State {
                 });
                 if let Some(rect) = damage_info {
                     state.damage_tracker.add_damage(rect);
+                } else if let Some(ls) = state.get_layer_surface_by_wl_surface(resource) {
+                    ls.needs_redraw = true;
+                    let g = ls.geometry;
+                    let rect = crate::state::Rectangle {
+                        x: g.x + x,
+                        y: g.y + y,
+                        width,
+                        height,
+                    };
+                    state.damage_tracker.add_damage(rect);
                 }
             }
             wl_surface::Request::DamageBuffer { x, y, width, height } => {
@@ -104,6 +140,16 @@ impl Dispatch<WlSurface, ()> for State {
                 });
                 if let Some(rect) = damage_info {
                     state.damage_tracker.add_damage(rect);
+                } else if let Some(ls) = state.get_layer_surface_by_wl_surface(resource) {
+                    ls.needs_redraw = true;
+                    let g = ls.geometry;
+                    let rect = crate::state::Rectangle {
+                        x: g.x + x,
+                        y: g.y + y,
+                        width,
+                        height,
+                    };
+                    state.damage_tracker.add_damage(rect);
                 }
             }
             wl_surface::Request::Destroy => {
@@ -114,6 +160,9 @@ impl Dispatch<WlSurface, ()> for State {
                     log::info!("[surface] Found window {} for surface, removing", window_id);
                     state.remove_window(window_id);
                     state.relayout_windows();
+                } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
+                    log::info!("[surface] Found layer surface for surface {:?}, removing", surface_id);
+                    state.remove_layer_surface_by_surface(resource);
                 } else {
                     log::debug!("[surface] No window found for surface {:?}", surface_id);
                 }
@@ -135,6 +184,9 @@ impl Dispatch<WlSurface, ()> for State {
             log::info!("[surface] Found window {} for destroyed surface, removing", window_id);
             state.remove_window(window_id);
             state.relayout_windows();
+        } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
+            log::info!("[surface] Found layer surface for destroyed surface {:?}, removing", surface_id);
+            state.remove_layer_surface_by_surface(resource);
         }
     }
 }

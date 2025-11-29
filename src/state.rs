@@ -4,6 +4,7 @@ use std::ptr::NonNull;
 use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer, wl_output::WlOutput};
 use wayland_server::Resource;
 use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{Anchor, ZwlrLayerSurfaceV1, KeyboardInteractivity};
 use wayland_server::backend::ObjectId;
 use crate::protocols::screencopy::PendingScreencopy;
 use crate::config::Config;
@@ -596,6 +597,41 @@ pub struct Window {
     pub cache_stride: usize,
 }
 
+pub type LayerSurfaceId = u64;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Layer {
+    Background = 0,
+    Bottom = 1,
+    #[default]
+    Top = 2,
+    Overlay = 3,
+}
+
+pub struct LayerSurface {
+    pub id: LayerSurfaceId,
+    pub wl_surface: WlSurface,
+    pub layer_surface: ZwlrLayerSurfaceV1,
+    pub layer: Layer,
+    pub namespace: String,
+    pub anchor: Anchor,
+    pub exclusive_zone: i32,
+    pub margin: (i32, i32, i32, i32),
+    pub keyboard_interactivity: KeyboardInteractivity,
+    pub geometry: Rectangle,
+    pub desired_width: u32,
+    pub desired_height: u32,
+    pub mapped: bool,
+    pub buffer: Option<WlBuffer>,
+    pub pending_buffer: Option<WlBuffer>,
+    pub pending_buffer_set: bool,
+    pub needs_redraw: bool,
+    pub pixel_cache: Vec<u32>,
+    pub cache_width: usize,
+    pub cache_height: usize,
+    pub cache_stride: usize,
+}
+
 pub struct State {
     pub config: Config,
     pub windows: Vec<Window>,
@@ -605,6 +641,9 @@ pub struct State {
     pub next_output_id: OutputId,
     pub canvas: Canvas,
     pub gpu_renderer: Option<crate::renderer::GpuRenderer>,
+
+    pub layer_surfaces: Vec<LayerSurface>,
+    pub next_layer_surface_id: LayerSurfaceId,
 
     pub shm_pools: HashMap<ObjectId, ShmPoolData>,
     pub buffers: HashMap<ObjectId, BufferData>,
@@ -708,6 +747,8 @@ impl State {
             next_output_id: 1,
             canvas: Canvas::new(default_width, default_height, bg_color),
             gpu_renderer: None,
+            layer_surfaces: Vec::new(),
+            next_layer_surface_id: 1,
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             dmabuf_buffers: HashMap::new(),
@@ -924,6 +965,14 @@ impl State {
         if let Some(window) = self.windows.iter_mut().find(|w| w.wl_surface.id() == surface_id) {
             window.needs_redraw = true;
             let geometry = window.geometry;
+            self.damage_tracker.add_damage(geometry);
+        }
+    }
+    
+    pub fn mark_layer_surface_damage(&mut self, surface_id: ObjectId) {
+        if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+            ls.needs_redraw = true;
+            let geometry = ls.geometry;
             self.damage_tracker.add_damage(geometry);
         }
     }
@@ -1362,6 +1411,92 @@ impl State {
         window.cache_width = buf_width;
         window.cache_height = buf_height;
         window.cache_stride = stride_pixels;
+        
+        true
+    }
+    
+    pub fn update_layer_surface_pixel_cache(&mut self, layer_surface_id: LayerSurfaceId) -> bool {
+        let (buffer_id, buf_width, buf_height) = {
+            let ls = match self.layer_surfaces.iter().find(|ls| ls.id == layer_surface_id) {
+                Some(ls) => ls,
+                None => return false,
+            };
+            let buffer = match &ls.buffer {
+                Some(b) => b,
+                None => return false,
+            };
+            let buffer_id = buffer.id();
+            let buffer_data = match self.buffers.get(&buffer_id) {
+                Some(d) => d,
+                None => return false,
+            };
+            (buffer_id, buffer_data.width as usize, buffer_data.height as usize)
+        };
+        
+        let buffer_data = match self.buffers.get(&buffer_id) {
+            Some(d) => d.clone(),
+            None => return false,
+        };
+        
+        let pool_data = match self.shm_pools.get_mut(&buffer_data.pool_id) {
+            Some(p) => p,
+            None => return false,
+        };
+        
+        if pool_data.mmap_ptr.is_none() {
+            unsafe {
+                let ptr = libc::mmap(
+                    std::ptr::null_mut(),
+                    pool_data.size as usize,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    pool_data.fd.as_fd().as_raw_fd(),
+                    0,
+                );
+                
+                if ptr == libc::MAP_FAILED {
+                    return false;
+                }
+                
+                pool_data.mmap_ptr = NonNull::new(ptr as *mut u8);
+            }
+        }
+        
+        let mmap_ptr = match pool_data.mmap_ptr {
+            Some(p) => p,
+            None => return false,
+        };
+        
+        let stride_pixels = (buffer_data.stride / 4) as usize;
+        let pixel_count = stride_pixels * buf_height;
+        let byte_count = pixel_count * 4;
+        let end_offset = buffer_data.offset as usize + byte_count;
+        
+        if end_offset > pool_data.size as usize {
+            log::warn!(
+                "[cache] Layer surface buffer exceeds pool bounds: offset={} + size={} > pool_size={}",
+                buffer_data.offset, byte_count, pool_data.size
+            );
+            return false;
+        }
+        
+        let ls = match self.layer_surfaces.iter_mut().find(|ls| ls.id == layer_surface_id) {
+            Some(ls) => ls,
+            None => return false,
+        };
+        
+        if ls.pixel_cache.len() < pixel_count {
+            ls.pixel_cache.resize(pixel_count, 0);
+        }
+        
+        unsafe {
+            let src = mmap_ptr.as_ptr().add(buffer_data.offset as usize) as *const u32;
+            std::ptr::copy_nonoverlapping(src, ls.pixel_cache.as_mut_ptr(), pixel_count);
+        }
+        
+        ls.cache_width = buf_width;
+        ls.cache_height = buf_height;
+        ls.cache_stride = stride_pixels;
         
         true
     }

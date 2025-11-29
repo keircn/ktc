@@ -9,3 +9,4 @@ pub mod screencopy;
 pub mod dmabuf;
 pub mod xdg_decoration;
 pub mod output_management;
+pub mod layer_shell;

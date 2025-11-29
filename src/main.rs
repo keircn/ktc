@@ -22,6 +22,7 @@ use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use wayland_protocols_wlr::output_management::v1::server::zwlr_output_manager_v1::ZwlrOutputManagerV1;
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use state::State;
 use protocols::dmabuf::DmaBufGlobal;
 use protocols::xdg_decoration::XdgDecorationGlobal;
 use protocols::output_management::OutputManagerGlobal;
+use protocols::layer_shell::LayerShellGlobal;
 
 fn main() {
     if unsafe { libc::geteuid() } == 0 {
@@ -62,6 +64,7 @@ fn setup_wayland(has_gpu: bool) -> (Display<State>, ListeningSocket) {
     dh.create_global::<State, ZxdgOutputManagerV1, _>(3, ());
     dh.create_global::<State, ZwlrScreencopyManagerV1, _>(3, ());
     dh.create_global::<State, ZwlrOutputManagerV1, _>(4, OutputManagerGlobal);
+    dh.create_global::<State, ZwlrLayerShellV1, _>(4, LayerShellGlobal);
     dh.create_global::<State, ZxdgDecorationManagerV1, _>(1, XdgDecorationGlobal);
     
     if has_gpu {
