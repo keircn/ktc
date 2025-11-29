@@ -110,33 +110,49 @@ fn run(config: Config) {
     
     let preferred_mode = config.display.parse_mode();
     let vsync_enabled = config.display.vsync;
+    let gpu_enabled = config.display.gpu;
 
     let (gpu_renderer, drm_info) = match drm_device {
         Ok(device) => {
             log::info!("Opened DRM device");
             
-            match renderer::GpuRenderer::new_with_config(
-                device.try_clone().unwrap(),
-                preferred_mode,
-                vsync_enabled,
-            ) {
-                Ok(gpu) => {
-                    let (w, h) = gpu.size();
-                    log::info!("GPU renderer initialized: {}x{}", w, h);
-                    (Some(gpu), None)
+            if gpu_enabled {
+                match renderer::GpuRenderer::new_with_config(
+                    device.try_clone().unwrap(),
+                    preferred_mode,
+                    vsync_enabled,
+                ) {
+                    Ok(gpu) => {
+                        let (w, h) = gpu.size();
+                        log::info!("GPU renderer initialized: {}x{}", w, h);
+                        (Some(gpu), None)
+                    }
+                    Err(e) => {
+                        log::warn!("GPU renderer failed: {}, falling back to CPU", e);
+                        match setup_drm(&device) {
+                            Ok(info) => {
+                                log::info!("DRM setup complete: {}x{}", info.width, info.height);
+                                (None, Some(info))
+                            }
+                            Err(e) => {
+                                log::error!("Failed to setup DRM: {}", e);
+                                log::warn!("Running in headless mode");
+                                (None, None)
+                            }
+                        }
+                    }
                 }
-                Err(e) => {
-                    log::warn!("GPU renderer failed: {}, falling back to CPU", e);
-                    match setup_drm(&device) {
-                        Ok(info) => {
-                            log::info!("DRM setup complete: {}x{}", info.width, info.height);
-                            (None, Some(info))
-                        }
-                        Err(e) => {
-                            log::error!("Failed to setup DRM: {}", e);
-                            log::warn!("Running in headless mode");
-                            (None, None)
-                        }
+            } else {
+                log::info!("GPU rendering disabled by config");
+                match setup_drm(&device) {
+                    Ok(info) => {
+                        log::info!("DRM setup complete: {}x{}", info.width, info.height);
+                        (None, Some(info))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to setup DRM: {}", e);
+                        log::warn!("Running in headless mode");
+                        (None, None)
                     }
                 }
             }

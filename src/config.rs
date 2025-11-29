@@ -25,6 +25,7 @@ fn default_drm_device() -> String { "auto".to_string() }
 fn default_preferred_mode() -> String { "auto".to_string() }
 fn default_vsync() -> bool { true }
 fn default_vrr() -> bool { false }
+fn default_gpu() -> bool { true }
 
 fn default_mod_key() -> String { "alt".to_string() }
 
@@ -77,6 +78,9 @@ pub struct DisplayConfig {
     #[serde(default = "default_vrr")]
     #[allow(dead_code)]
     pub vrr: bool,
+    
+    #[serde(default = "default_gpu")]
+    pub gpu: bool,
 }
 
 impl Default for DisplayConfig {
@@ -86,6 +90,7 @@ impl Default for DisplayConfig {
             mode: default_preferred_mode(),
             vsync: default_vsync(),
             vrr: default_vrr(),
+            gpu: default_gpu(),
         }
     }
 }
