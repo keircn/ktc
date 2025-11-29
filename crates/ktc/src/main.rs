@@ -811,11 +811,12 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         }
         
         let window_render_info: Vec<_> = state.windows.iter()
-            .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
+            .filter(|w| w.mapped && w.workspace == active_workspace && (w.buffer.is_some() || w.cache_width > 0))
             .map(|w| {
                 let buffer_id = w.buffer.as_ref().map(|b| b.id());
                 let is_shm = buffer_id.as_ref().map(|id| state.buffers.contains_key(id)).unwrap_or(false);
-                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id, w.fullscreen)
+                let has_cache = w.cache_width > 0 && w.cache_height > 0 && !w.pixel_cache.is_empty();
+                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id, w.fullscreen, has_cache)
             })
             .collect();
         
@@ -832,7 +833,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         ];
         gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
         
-        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id, is_fullscreen) in &window_render_info {
+        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id, is_fullscreen, has_cache) in &window_render_info {
             let is_focused = focused_id == Some(*id);
             
             let (content_y, effective_title_height) = if *is_fullscreen {
@@ -854,7 +855,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             
             let _ = effective_title_height;
             
-            if *is_shm {
+            if *is_shm || *has_cache {
                 let win = match state.windows.iter().find(|w| w.id == *id) {
                     Some(w) if !w.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => w,
                     _ => continue,
@@ -921,7 +922,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         }
         
         let layer_render_info: Vec<_> = state.layer_surfaces.iter()
-            .filter(|ls| ls.mapped && ls.buffer.is_some())
+            .filter(|ls| ls.mapped && (ls.buffer.is_some() || ls.cache_width > 0))
             .map(|ls| {
                 let buffer_id = ls.buffer.as_ref().map(|b| b.id());
                 (ls.id, ls.geometry, ls.cache_width, ls.cache_height, ls.cache_stride, buffer_id)
@@ -981,8 +982,8 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             }
         }
         
-        for (id, _, _, _, _, is_shm, buffer_id, _) in &window_render_info {
-            if !is_shm {
+        for (id, _, _, _, _, is_shm, buffer_id, _, has_cache) in &window_render_info {
+            if !is_shm && !has_cache {
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                     if win.needs_redraw {
                         win.needs_redraw = false;
@@ -1050,7 +1051,7 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             let active_workspace = state.active_workspace;
             
             let windows_to_render: Vec<_> = state.windows.iter()
-                .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
+                .filter(|w| w.mapped && w.workspace == active_workspace && (w.buffer.is_some() || w.cache_width > 0))
                 .map(|w| (w.id, w.fullscreen))
                 .collect();
             
@@ -1132,7 +1133,7 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             }
             
             let layer_surfaces_to_render: Vec<_> = state.layer_surfaces.iter()
-                .filter(|ls| ls.mapped && ls.buffer.is_some())
+                .filter(|ls| ls.mapped && (ls.buffer.is_some() || ls.cache_width > 0))
                 .map(|ls| ls.id)
                 .collect();
             
