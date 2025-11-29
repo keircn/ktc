@@ -1,7 +1,6 @@
 # ktc - Keiran's Tiling Compositor
 
-A minimal Wayland tiling compositor written in Rust
-        for the sake of learning how Wayland works.
+A minimal Wayland tiling compositor written in Rust for the sake of learning how Wayland works.
 
 ## Building & Running
 
@@ -15,18 +14,43 @@ sudo usermod -aG video,input $USER
 ./target/release/ktc
 ```
 
-Once running, use `Alt+T` to launch a terminal (requires `foot` terminal).
+Once running, use `Mod+Return` to launch a terminal (requires `foot` terminal). The default modifier key is `Alt`.
 
 ## Keybinds
 
-- `Ctrl+Alt+Q` - Exit compositor
-- `Alt+T` - Launch terminal (foot)
-- `Alt+Tab` / `Alt+J` - Focus next window
-- `Alt+K` - Focus previous window
+Default keybinds (configurable via config file):
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Alt+Q` | Exit compositor |
+| `Mod+Return` | Launch terminal (foot) |
+| `Mod+J` | Focus next window |
+| `Mod+K` | Focus previous window |
+| `Mod+Shift+Q` | Close focused window |
+| `Mod+1-4` | Switch to workspace 1-4 |
+| `Mod+Shift+1-4` | Move window to workspace 1-4 |
 
 ## Configuration
 
 Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
+
+## Components
+
+### ktc
+
+The main compositor binary.
+
+### ktcbar
+
+A status bar that uses the layer shell protocol. Displays:
+- Workspace indicators
+- Current time
+- Focused window title
+
+Run alongside the compositor:
+```bash
+./target/release/ktcbar
+```
 
 ## Features
 
@@ -34,7 +58,9 @@ Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 - Vsync support using DRM page flipping for tear-free display
 - DMA-BUF support for zero-copy buffer sharing with clients
 - CPU fallback for systems without GPU support
-- Tiling window management
+- Tiling window management with workspaces
+- Layer shell support for panels, wallpapers, and overlays
+- IPC socket for external tools (used by ktcbar)
 - XDG shell support
 - Configurable keybinds and appearance
 - Screen recording support (wlr-screencopy)
@@ -53,6 +79,7 @@ Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 | xdg_wm_base | 5 | Full |
 | xdg_output_manager | 3 | Full |
 | xdg_decoration_manager | 1 | Full |
+| zwlr_layer_shell | 4 | Full |
 | zwlr_screencopy_manager | 3 | Full |
 | zwlr_output_manager | 4 | Read-only |
 | zwp_linux_dmabuf | 4 | Full |
@@ -65,7 +92,6 @@ Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 - [ ] Output configuration apply (resolution/refresh changes via wlr-output-management)
 - [ ] Pointer constraints protocol (for games/3D apps)
 - [ ] Relative pointer protocol (for games/3D apps)
-- [x] Layer shell protocol (for panels, wallpapers, overlays)
 
 ### Medium-term
 
@@ -86,7 +112,7 @@ Copy `example.config.toml` to `~/.config/ktc/config.toml` and customize.
 ## Dependencies
 
 - `wayland-server` - Wayland protocol server implementation
-- `wayland-protocols` - Standard Wayland protocols (xdg-shell, wlr-screencopy)
+- `wayland-protocols` / `wayland-protocols-wlr` - Standard and wlroots Wayland protocols
 - `calloop` - Event loop for Wayland protocol dispatch
 - `drm` / `gbm` - Direct Rendering Manager for display output
 - `khronos-egl` / `glow` - OpenGL ES rendering
