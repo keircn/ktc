@@ -69,6 +69,7 @@ impl Dispatch<WlSurface, ()> for State {
                     if window.pending_buffer_set {
                         window.buffer = window.pending_buffer.take();
                         window.pending_buffer_set = false;
+                        window.buffer_released = false;
                     }
                     window.mapped = window.buffer.is_some();
                     state.mark_surface_damage(surface_id.clone());
@@ -86,6 +87,7 @@ impl Dispatch<WlSurface, ()> for State {
                             if ls.pending_buffer_set {
                                 ls.buffer = ls.pending_buffer.take();
                                 ls.pending_buffer_set = false;
+                                ls.buffer_released = false;
                             }
                             let was_mapped = ls.mapped;
                             ls.mapped = ls.buffer.is_some();

@@ -100,6 +100,7 @@ impl Dispatch<ZwlrLayerShellV1, ()> for State {
                     buffer: None,
                     pending_buffer: None,
                     pending_buffer_set: false,
+                    buffer_released: true,
                     needs_redraw: true,
                     pixel_cache: Vec::new(),
                     cache_width: 0,
