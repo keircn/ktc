@@ -28,6 +28,8 @@ fn default_vsync() -> bool { true }
 fn default_vrr() -> bool { false }
 fn default_gpu() -> bool { true }
 
+fn default_renderer() -> String { "vulkan".to_string() }
+
 fn default_mod_key() -> String { "alt".to_string() }
 
 fn default_bindings() -> Vec<KeybindEntry> {
@@ -378,6 +380,9 @@ pub struct DisplayConfig {
     
     #[serde(default = "default_gpu")]
     pub gpu: bool,
+    
+    #[serde(default = "default_renderer")]
+    pub renderer: String,
 }
 
 impl Default for DisplayConfig {
@@ -388,6 +393,7 @@ impl Default for DisplayConfig {
             vsync: default_vsync(),
             vrr: default_vrr(),
             gpu: default_gpu(),
+            renderer: default_renderer(),
         }
     }
 }

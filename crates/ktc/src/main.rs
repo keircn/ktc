@@ -6,6 +6,7 @@ mod logging;
 mod session;
 mod config;
 mod renderer;
+mod vulkan_renderer;
 
 use config::Config;
 use input::KeyState;
@@ -115,33 +116,78 @@ fn run(config: Config) {
     let preferred_mode = config.display.parse_mode();
     let vsync_enabled = config.display.vsync;
     let gpu_enabled = config.display.gpu;
+    let use_vulkan = config.display.renderer.to_lowercase() == "vulkan";
 
-    let (gpu_renderer, drm_info) = match drm_device {
+    let (gpu_renderer, vulkan_renderer, drm_info) = match drm_device {
         Ok(device) => {
             log::info!("Opened DRM device");
             
             if gpu_enabled {
-                match renderer::GpuRenderer::new_with_config(
-                    device.try_clone().unwrap(),
-                    preferred_mode,
-                    vsync_enabled,
-                ) {
-                    Ok(gpu) => {
-                        let (w, h) = gpu.size();
-                        log::info!("GPU renderer initialized: {}x{}", w, h);
-                        (Some(gpu), None)
-                    }
-                    Err(e) => {
-                        log::warn!("GPU renderer failed: {}, falling back to CPU", e);
-                        match setup_drm(&device) {
-                            Ok(info) => {
-                                log::info!("DRM setup complete: {}x{}", info.width, info.height);
-                                (None, Some(info))
+                if use_vulkan {
+                    log::info!("Using Vulkan renderer");
+                    match vulkan_renderer::VulkanRenderer::new_with_config(
+                        device.try_clone().unwrap(),
+                        preferred_mode,
+                        vsync_enabled,
+                    ) {
+                        Ok(vk) => {
+                            let (w, h) = vk.size();
+                            log::info!("Vulkan renderer initialized: {}x{}", w, h);
+                            (None, Some(vk), None)
+                        }
+                        Err(e) => {
+                            log::warn!("Vulkan renderer failed: {}, falling back to OpenGL", e);
+                            match renderer::GpuRenderer::new_with_config(
+                                device.try_clone().unwrap(),
+                                preferred_mode,
+                                vsync_enabled,
+                            ) {
+                                Ok(gpu) => {
+                                    let (w, h) = gpu.size();
+                                    log::info!("GPU renderer initialized: {}x{}", w, h);
+                                    (Some(gpu), None, None)
+                                }
+                                Err(e) => {
+                                    log::warn!("GPU renderer failed: {}, falling back to CPU", e);
+                                    match setup_drm(&device) {
+                                        Ok(info) => {
+                                            log::info!("DRM setup complete: {}x{}", info.width, info.height);
+                                            (None, None, Some(info))
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to setup DRM: {}", e);
+                                            log::warn!("Running in headless mode");
+                                            (None, None, None)
+                                        }
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                log::error!("Failed to setup DRM: {}", e);
-                                log::warn!("Running in headless mode");
-                                (None, None)
+                        }
+                    }
+                } else {
+                    log::info!("Using OpenGL renderer");
+                    match renderer::GpuRenderer::new_with_config(
+                        device.try_clone().unwrap(),
+                        preferred_mode,
+                        vsync_enabled,
+                    ) {
+                        Ok(gpu) => {
+                            let (w, h) = gpu.size();
+                            log::info!("GPU renderer initialized: {}x{}", w, h);
+                            (Some(gpu), None, None)
+                        }
+                        Err(e) => {
+                            log::warn!("GPU renderer failed: {}, falling back to CPU", e);
+                            match setup_drm(&device) {
+                                Ok(info) => {
+                                    log::info!("DRM setup complete: {}x{}", info.width, info.height);
+                                    (None, None, Some(info))
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to setup DRM: {}", e);
+                                    log::warn!("Running in headless mode");
+                                    (None, None, None)
+                                }
                             }
                         }
                     }
@@ -151,12 +197,12 @@ fn run(config: Config) {
                 match setup_drm(&device) {
                     Ok(info) => {
                         log::info!("DRM setup complete: {}x{}", info.width, info.height);
-                        (None, Some(info))
+                        (None, None, Some(info))
                     }
                     Err(e) => {
                         log::error!("Failed to setup DRM: {}", e);
                         log::warn!("Running in headless mode");
-                        (None, None)
+                        (None, None, None)
                     }
                 }
             }
@@ -165,11 +211,11 @@ fn run(config: Config) {
             log::error!("Failed to open DRM device: {}", e);
             log::warn!("Running in headless mode (no display output)");
             log::info!("Make sure you're in the 'video' group: sudo usermod -aG video $USER");
-            (None, None)
+            (None, None, None)
         }
     };
 
-    let has_gpu = gpu_renderer.is_some();
+    let has_gpu = gpu_renderer.is_some() || vulkan_renderer.is_some();
     let (mut display, socket) = setup_wayland(has_gpu);
     
     let socket_name = socket.socket_name()
@@ -282,6 +328,26 @@ fn run(config: Config) {
             )
             .expect("Failed to insert DRM source");
     }
+    
+    if let Some(ref vk) = vulkan_renderer {
+        let drm_fd = vk.drm_fd().try_clone_to_owned()
+            .expect("Failed to clone Vulkan DRM fd");
+        
+        calloop_loop
+            .handle()
+            .insert_source(
+                calloop::generic::Generic::new(
+                    drm_fd,
+                    calloop::Interest::READ,
+                    calloop::Mode::Level,
+                ),
+                |_, _, data| {
+                    data.vsync_pending = true;
+                    Ok(calloop::PostAction::Continue)
+                },
+            )
+            .expect("Failed to insert Vulkan DRM source");
+    }
 
     let _timer = calloop_loop.handle()
         .insert_source(
@@ -312,6 +378,9 @@ fn run(config: Config) {
                     if let Some(ref mut gpu) = data.state.gpu_renderer {
                         gpu.handle_drm_event();
                     }
+                    if let Some(ref mut vk) = data.state.vulkan_renderer {
+                        vk.handle_drm_event();
+                    }
                 }
                 
                 data.display.dispatch_clients(&mut data.state).ok();
@@ -323,9 +392,15 @@ fn run(config: Config) {
                 let profiler_stats = data.frame_profiler.get_stats(&data.state);
                 let show_profiler = data.state.config.debug.profiler;
                 
-                let can_render = data.state.gpu_renderer.as_ref()
-                    .map(|gpu| !gpu.is_flip_pending())
-                    .unwrap_or(true);
+                let can_render = if data.state.vulkan_renderer.is_some() {
+                    data.state.vulkan_renderer.as_ref()
+                        .map(|vk| !vk.is_flip_pending())
+                        .unwrap_or(true)
+                } else {
+                    data.state.gpu_renderer.as_ref()
+                        .map(|gpu| !gpu.is_flip_pending())
+                        .unwrap_or(true)
+                };
                 
                 let render_start = std::time::Instant::now();
                 if can_render {
@@ -337,7 +412,7 @@ fn run(config: Config) {
                 let total_time = frame_start.elapsed().as_micros() as u64;
                 data.frame_profiler.record_frame(input_time, render_time, total_time, &data.state);
                 
-                let timeout = if data.state.gpu_renderer.is_some() {
+                let timeout = if data.state.gpu_renderer.is_some() || data.state.vulkan_renderer.is_some() {
                     std::time::Duration::from_millis(1)
                 } else {
                     std::time::Duration::from_millis(16)
@@ -389,8 +464,28 @@ fn run(config: Config) {
     };
     
     loop_data.state.gpu_renderer = gpu_renderer;
+    loop_data.state.vulkan_renderer = vulkan_renderer;
     
-    if let Some(ref gpu) = loop_data.state.gpu_renderer {
+    if let Some(ref vk) = loop_data.state.vulkan_renderer {
+        let (w, h) = vk.size();
+        let (phys_w, phys_h) = vk.physical_size();
+        use state::OutputConfig;
+        let output_id = loop_data.state.add_output("Vulkan".to_string(), w as i32, h as i32);
+        
+        let physical_size = if phys_w > 0 && phys_h > 0 {
+            Some((phys_w as i32, phys_h as i32))
+        } else {
+            None
+        };
+        
+        loop_data.state.configure_output(output_id, OutputConfig {
+            make: Some("GPU".to_string()),
+            model: Some("Vulkan".to_string()),
+            physical_size,
+            ..Default::default()
+        });
+        log::info!("Configured Vulkan output at {}x{} (physical: {}x{}mm)", w, h, phys_w, phys_h);
+    } else if let Some(ref gpu) = loop_data.state.gpu_renderer {
         let (w, h) = gpu.size();
         let (phys_w, phys_h) = gpu.physical_size();
         use state::OutputConfig;
@@ -765,6 +860,11 @@ fn spawn_command(cmd: &str, socket_name: &str) {
 }
 
 fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>, profiler_stats: Option<&renderer::ProfilerStats>) {
+    if state.vulkan_renderer.is_some() {
+        render_vulkan(state, display, profiler_stats);
+        return;
+    }
+    
     if state.gpu_renderer.is_some() {
         render_gpu(state, display, profiler_stats);
         return;
@@ -876,31 +976,41 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                 );
             } else if let Some(buf_id) = buffer_id {
                 if let Some(dmabuf_info) = state.dmabuf_buffers.get(buf_id) {
-                    let info = dmabuf_info.clone();
+                    use std::os::fd::AsRawFd;
                     let buffer_cache_id = buf_id.protocol_id() as u64;
+                    let raw_fd = dmabuf_info.fd.as_raw_fd();
+                    let width = dmabuf_info.width;
+                    let height = dmabuf_info.height;
+                    let format = dmabuf_info.format;
+                    let modifier = dmabuf_info.modifier;
+                    let stride = dmabuf_info.stride;
+                    let offset = dmabuf_info.offset;
+                    log::debug!("[render] DMA-BUF window {}: {}x{} format={:#x} modifier={:#x} fd={}", 
+                        id, width, height, format, modifier, raw_fd);
                     let gpu = state.gpu_renderer.as_mut().unwrap();
                     if let Some(texture) = gpu.import_dmabuf_texture(
                         buffer_cache_id,
-                        info.fd,
-                        info.width as u32,
-                        info.height as u32,
-                        info.format,
-                        info.stride,
-                        info.offset,
-                        info.modifier,
+                        raw_fd,
+                        width as u32,
+                        height as u32,
+                        format,
+                        stride,
+                        offset,
+                        modifier,
                     ) {
-                        gpu.draw_texture(
+                        gpu.draw_dmabuf_texture(
                             texture,
                             geom.x,
                             content_y,
-                            info.width,
-                            info.height,
+                            width,
+                            height,
                         );
                     } else {
                         log::warn!("[render] DMA-BUF texture import failed for window {}", id);
                     }
                 } else {
-                    log::warn!("[render] No dmabuf_info for buffer {:?}", buf_id);
+                    log::debug!("[render] Window {} buffer {:?} not in dmabuf_buffers (count={}), not in shm buffers either", 
+                        id, buf_id, state.dmabuf_buffers.len());
                 }
             }
         }
@@ -968,6 +1078,245 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
+        
+        for id in &windows_needing_update {
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
+                win.needs_redraw = false;
+                if !win.buffer_released {
+                    if let Some(ref buffer) = win.buffer {
+                        buffer.release();
+                        win.buffer_released = true;
+                    }
+                }
+            }
+        }
+        
+        if has_damage {
+            state.damage_tracker.clear();
+        }
+    }
+    
+    if has_pending_screencopy {
+        state.process_screencopy_frames(true);
+    }
+    
+    if has_frame_callbacks {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u32;
+        
+        for callback in state.frame_callbacks.drain(..) {
+            callback.done(time);
+        }
+    }
+    
+    display.flush_clients().ok();
+}
+
+fn render_vulkan(state: &mut State, display: &mut Display<State>, profiler_stats: Option<&renderer::ProfilerStats>) {
+    if state.needs_relayout {
+        state.needs_relayout = false;
+        state.relayout_windows();
+        display.flush_clients().ok();
+    }
+    
+    let has_pending_screencopy = !state.screencopy_frames.is_empty();
+    let has_frame_callbacks = !state.frame_callbacks.is_empty();
+    let has_damage = state.damage_tracker.has_damage();
+    let has_profiler = profiler_stats.is_some();
+    
+    if !has_damage && !has_pending_screencopy && !has_frame_callbacks && !has_profiler {
+        return;
+    }
+    
+    let needs_render = has_damage || has_pending_screencopy || has_profiler;
+    
+    if needs_render {
+        let bg_dark = state.config.background_dark();
+        let title_focused = state.config.title_focused();
+        let title_unfocused = state.config.title_unfocused();
+        let title_bar_height = state.config.title_bar_height();
+        let focused_id = state.focused_window;
+        let active_workspace = state.active_workspace;
+        let windows_needing_update: Vec<_> = state.windows.iter()
+            .filter(|w| w.mapped && w.buffer.is_some() && w.needs_redraw && w.workspace == active_workspace)
+            .map(|w| w.id)
+            .collect();
+        
+        for id in &windows_needing_update {
+            state.update_window_pixel_cache(*id);
+        }
+        
+        let window_render_info: Vec<_> = state.windows.iter()
+            .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
+            .map(|w| {
+                let buffer_id = w.buffer.as_ref().map(|b| b.id());
+                let is_shm = buffer_id.as_ref().map(|id| state.buffers.contains_key(id)).unwrap_or(false);
+                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id, w.fullscreen)
+            })
+            .collect();
+        
+        let vk = state.vulkan_renderer.as_mut().unwrap();
+        
+        vk.begin_frame();
+        
+        let (width, height) = vk.size();
+        let bg_color = [
+            ((bg_dark >> 16) & 0xFF) as f32 / 255.0,
+            ((bg_dark >> 8) & 0xFF) as f32 / 255.0,
+            (bg_dark & 0xFF) as f32 / 255.0,
+            1.0,
+        ];
+        vk.draw_rect(0, 0, width as i32, height as i32, bg_color);
+        
+        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id, is_fullscreen) in &window_render_info {
+            let is_focused = focused_id == Some(*id);
+            
+            let (content_y, _effective_title_height) = if *is_fullscreen {
+                (geom.y, 0)
+            } else {
+                let title_color = if is_focused { title_focused } else { title_unfocused };
+                let title_rgba = [
+                    ((title_color >> 16) & 0xFF) as f32 / 255.0,
+                    ((title_color >> 8) & 0xFF) as f32 / 255.0,
+                    (title_color & 0xFF) as f32 / 255.0,
+                    1.0,
+                ];
+                
+                let vk = state.vulkan_renderer.as_mut().unwrap();
+                vk.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
+                
+                (geom.y + title_bar_height, title_bar_height)
+            };
+            
+            if *is_shm {
+                let win = match state.windows.iter().find(|w| w.id == *id) {
+                    Some(w) if !w.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => w,
+                    _ => continue,
+                };
+                
+                let data: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        win.pixel_cache.as_ptr() as *const u8,
+                        win.pixel_cache.len() * 4,
+                    )
+                };
+                let vk = state.vulkan_renderer.as_mut().unwrap();
+                let texture = vk.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
+                
+                let vk = state.vulkan_renderer.as_mut().unwrap();
+                vk.draw_texture(
+                    texture,
+                    geom.x,
+                    content_y,
+                    *cache_w as i32,
+                    *cache_h as i32,
+                );
+            } else if let Some(buf_id) = buffer_id {
+                if let Some(dmabuf_info) = state.dmabuf_buffers.get(buf_id) {
+                    use std::os::fd::AsRawFd;
+                    let buffer_cache_id = buf_id.protocol_id() as u64;
+                    let raw_fd = dmabuf_info.fd.as_raw_fd();
+                    let width = dmabuf_info.width;
+                    let height = dmabuf_info.height;
+                    let format = dmabuf_info.format;
+                    let modifier = dmabuf_info.modifier;
+                    let stride = dmabuf_info.stride;
+                    let offset = dmabuf_info.offset;
+                    log::debug!("[vulkan render] DMA-BUF window {}: {}x{} format={:#x} modifier={:#x} fd={}", 
+                        id, width, height, format, modifier, raw_fd);
+                    let vk = state.vulkan_renderer.as_mut().unwrap();
+                    if vk.import_dmabuf_texture(
+                        buffer_cache_id,
+                        raw_fd,
+                        width as u32,
+                        height as u32,
+                        format,
+                        stride,
+                        offset,
+                        modifier,
+                    ).is_some() {
+                        vk.draw_dmabuf_texture(
+                            buffer_cache_id,
+                            geom.x,
+                            content_y,
+                            width,
+                            height,
+                        );
+                    } else {
+                        log::warn!("[vulkan render] DMA-BUF texture import failed for window {}", id);
+                    }
+                } else {
+                    log::debug!("[vulkan render] Window {} buffer {:?} not in dmabuf_buffers (count={}), not in shm buffers either", 
+                        id, buf_id, state.dmabuf_buffers.len());
+                }
+            }
+        }
+        
+        let layer_surfaces_needing_update: Vec<_> = state.layer_surfaces.iter()
+            .filter(|ls| ls.mapped && ls.buffer.is_some() && ls.needs_redraw)
+            .map(|ls| ls.id)
+            .collect();
+        
+        for id in &layer_surfaces_needing_update {
+            state.update_layer_surface_pixel_cache(*id);
+        }
+        
+        let layer_render_info: Vec<_> = state.layer_surfaces.iter()
+            .filter(|ls| ls.mapped && ls.buffer.is_some())
+            .map(|ls| {
+                let buffer_id = ls.buffer.as_ref().map(|b| b.id());
+                (ls.id, ls.geometry, ls.cache_width, ls.cache_height, ls.cache_stride, buffer_id)
+            })
+            .collect();
+        
+        for (id, geom, cache_w, cache_h, cache_stride, _buffer_id) in &layer_render_info {
+            let ls = match state.layer_surfaces.iter().find(|ls| ls.id == *id) {
+                Some(ls) if !ls.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => ls,
+                _ => continue,
+            };
+            
+            let data: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    ls.pixel_cache.as_ptr() as *const u8,
+                    ls.pixel_cache.len() * 4,
+                )
+            };
+            
+            let texture_id = *id + 1_000_000;
+            let vk = state.vulkan_renderer.as_mut().unwrap();
+            let texture = vk.upload_shm_texture(texture_id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
+            
+            let vk = state.vulkan_renderer.as_mut().unwrap();
+            vk.draw_texture(
+                texture,
+                geom.x,
+                geom.y,
+                *cache_w as i32,
+                *cache_h as i32,
+            );
+        }
+        
+        for id in &layer_surfaces_needing_update {
+            if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
+                ls.needs_redraw = false;
+                if !ls.buffer_released {
+                    if let Some(ref buffer) = ls.buffer {
+                        buffer.release();
+                        ls.buffer_released = true;
+                    }
+                }
+            }
+        }
+        
+        if let Some(stats) = profiler_stats {
+            let vk = state.vulkan_renderer.as_mut().unwrap();
+            vk.draw_profiler(stats);
+        }
+        
+        let vk = state.vulkan_renderer.as_mut().unwrap();
+        vk.end_frame();
         
         for id in &windows_needing_update {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
@@ -1308,9 +1657,13 @@ impl FrameProfiler {
             .sum();
         let memory_mb = (canvas_bytes + window_cache_bytes) as f32 / (1024.0 * 1024.0);
         
-        let texture_count = state.gpu_renderer.as_ref()
-            .map(|r| r.texture_count())
-            .unwrap_or(0);
+        let texture_count = if let Some(ref vk) = state.vulkan_renderer {
+            vk.texture_count()
+        } else {
+            state.gpu_renderer.as_ref()
+                .map(|r| r.texture_count())
+                .unwrap_or(0)
+        };
         
         renderer::ProfilerStats {
             fps: self.last_fps,

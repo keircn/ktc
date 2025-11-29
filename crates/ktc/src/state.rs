@@ -650,6 +650,7 @@ pub struct State {
     pub next_output_id: OutputId,
     pub canvas: Canvas,
     pub gpu_renderer: Option<crate::renderer::GpuRenderer>,
+    pub vulkan_renderer: Option<crate::vulkan_renderer::VulkanRenderer>,
 
     pub layer_surfaces: Vec<LayerSurface>,
     pub next_layer_surface_id: LayerSurfaceId,
@@ -719,13 +720,12 @@ pub struct BufferData {
     pub format: u32,
 }
 
-#[derive(Clone)]
 pub struct DmaBufBufferInfo {
     pub width: i32,
     pub height: i32,
     pub format: u32,
     pub modifier: u64,
-    pub fd: std::os::fd::RawFd,
+    pub fd: OwnedFd,
     pub stride: u32,
     pub offset: u32,
 }
@@ -760,6 +760,7 @@ impl State {
             next_output_id: 1,
             canvas: Canvas::new(default_width, default_height, bg_color),
             gpu_renderer: None,
+            vulkan_renderer: None,
             layer_surfaces: Vec::new(),
             next_layer_surface_id: 1,
             shm_pools: HashMap::new(),

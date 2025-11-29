@@ -10,8 +10,6 @@ use khronos_egl as egl;
 pub type GlowContext = glow::Context;
 
 const EGL_PLATFORM_GBM_KHR: egl::Enum = 0x31D7;
-
-// EGL_EXT_image_dma_buf_import
 const EGL_LINUX_DMA_BUF_EXT: egl::Enum = 0x3270;
 const EGL_LINUX_DRM_FOURCC_EXT: egl::Int = 0x3271;
 const EGL_DMA_BUF_PLANE0_FD_EXT: egl::Int = 0x3272;
@@ -19,8 +17,8 @@ const EGL_DMA_BUF_PLANE0_OFFSET_EXT: egl::Int = 0x3273;
 const EGL_DMA_BUF_PLANE0_PITCH_EXT: egl::Int = 0x3274;
 const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: egl::Int = 0x3443;
 const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: egl::Int = 0x3444;
-const EGL_IMAGE_PRESERVED_KHR: egl::Int = 0x30D2;
 
+#[allow(dead_code)]
 const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
 
 const VERTEX_SHADER: &str = r#"#version 100
@@ -46,7 +44,20 @@ varying vec2 v_texcoord;
 uniform sampler2D u_texture;
 
 void main() {
-    gl_FragColor = texture2D(u_texture, v_texcoord);
+    vec4 color = texture2D(u_texture, v_texcoord);
+    gl_FragColor = vec4(color.rgb, 1.0);
+}
+"#;
+
+const FRAGMENT_SHADER_EXTERNAL: &str = r#"#version 100
+#extension GL_OES_EGL_image_external : require
+precision mediump float;
+varying vec2 v_texcoord;
+uniform samplerExternalOES u_texture;
+
+void main() {
+    vec4 color = texture2D(u_texture, v_texcoord);
+    gl_FragColor = vec4(color.rgb, 1.0);
 }
 "#;
 
@@ -93,6 +104,7 @@ pub struct GpuRenderer {
     flip_pending: bool,
     
     texture_program: glow::Program,
+    external_program: Option<glow::Program>,
     color_program: glow::Program,
     quad_vao: glow::VertexArray,
     #[allow(dead_code)]
@@ -268,6 +280,12 @@ impl GpuRenderer {
         log::info!("[gpu] OpenGL version: {:?}", unsafe { gl.get_parameter_string(glow::VERSION) });
         log::info!("[gpu] OpenGL renderer: {:?}", unsafe { gl.get_parameter_string(glow::RENDERER) });
         let texture_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_TEXTURE)?;
+        let external_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_EXTERNAL).ok();
+        if external_program.is_some() {
+            log::info!("[gpu] GL_OES_EGL_image_external supported");
+        } else {
+            log::warn!("[gpu] GL_OES_EGL_image_external not supported, DMA-BUF may not work");
+        }
         let color_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_COLOR)?;
         let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
         let supported_formats = Self::query_dmabuf_formats(&egl, display);
@@ -294,6 +312,7 @@ impl GpuRenderer {
             mode_set: false,
             flip_pending: false,
             texture_program,
+            external_program,
             color_program,
             quad_vao,
             quad_vbo,
@@ -725,9 +744,15 @@ impl GpuRenderer {
         offset: u32,
         modifier: u64,
     ) -> Option<glow::Texture> {
-        if let Some((tex, _)) = self.dmabuf_textures.get(&id) {
-            return Some(*tex);
+        if let Some((tex, img)) = self.dmabuf_textures.remove(&id) {
+            unsafe {
+                self.gl.delete_texture(tex);
+                self.egl.destroy_image(self.display, img).ok();
+            }
         }
+        
+        log::debug!("[gpu] Importing DMA-BUF: id={} fd={} {}x{} format={:#x} stride={} offset={} modifier={:#x}",
+            id, fd, width, height, format, stride, offset, modifier);
         
         let mut attribs: Vec<egl::Attrib> = vec![
             egl::WIDTH as egl::Attrib, width as egl::Attrib,
@@ -746,8 +771,6 @@ impl GpuRenderer {
             attribs.push((modifier >> 32) as egl::Attrib);
         }
         
-        attribs.push(EGL_IMAGE_PRESERVED_KHR as egl::Attrib);
-        attribs.push(egl::TRUE as egl::Attrib);
         attribs.push(egl::NONE as egl::Attrib);
         
         let image = unsafe {
@@ -770,18 +793,23 @@ impl GpuRenderer {
         
         let texture = unsafe {
             let tex = self.gl.create_texture().ok()?;
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(tex));
+            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             
             type GlEglImageTargetTexture2DOesFn = unsafe extern "C" fn(u32, *const std::ffi::c_void);
             let func: Option<GlEglImageTargetTexture2DOesFn> = self.egl.get_proc_address("glEGLImageTargetTexture2DOES")
                 .map(|p| std::mem::transmute(p));
             
             if let Some(gl_image_target) = func {
-                gl_image_target(glow::TEXTURE_2D, image.as_ptr());
+                gl_image_target(GL_TEXTURE_EXTERNAL_OES, image.as_ptr());
+                
+                let gl_error = self.gl.get_error();
+                if gl_error != glow::NO_ERROR {
+                    log::warn!("[gpu] GL error after EGL image target: {:#x}", gl_error);
+                }
             } else {
                 log::warn!("[gpu] glEGLImageTargetTexture2DOES not available");
                 self.gl.delete_texture(tex);
@@ -792,6 +820,7 @@ impl GpuRenderer {
             tex
         };
         
+        log::debug!("[gpu] Successfully imported DMA-BUF texture id={}", id);
         self.dmabuf_textures.insert(id, (texture, image));
         Some(texture)
     }
@@ -802,6 +831,9 @@ impl GpuRenderer {
     
     pub fn draw_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32) {
         unsafe {
+            self.gl.enable(glow::BLEND);
+            self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            
             self.gl.use_program(Some(self.texture_program));
             
             let offset_loc = self.gl.get_uniform_location(self.texture_program, "u_offset");
@@ -819,6 +851,48 @@ impl GpuRenderer {
             
             self.gl.bind_vertex_array(Some(self.quad_vao));
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+            
+            self.gl.disable(glow::BLEND);
+        }
+    }
+    
+    pub fn draw_dmabuf_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32) {
+        let program = match self.external_program {
+            Some(p) => p,
+            None => {
+                log::warn!("[gpu] Cannot draw DMA-BUF texture: external program not available");
+                return;
+            }
+        };
+        
+        unsafe {
+            self.gl.enable(glow::BLEND);
+            self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            
+            self.gl.use_program(Some(program));
+            
+            let offset_loc = self.gl.get_uniform_location(program, "u_offset");
+            let size_loc = self.gl.get_uniform_location(program, "u_size");
+            let screen_loc = self.gl.get_uniform_location(program, "u_screen_size");
+            let tex_loc = self.gl.get_uniform_location(program, "u_texture");
+            
+            self.gl.uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
+            self.gl.uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
+            self.gl.uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
+            self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
+            
+            self.gl.active_texture(glow::TEXTURE0);
+            self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(texture));
+            
+            self.gl.bind_vertex_array(Some(self.quad_vao));
+            self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+            
+            let gl_error = self.gl.get_error();
+            if gl_error != glow::NO_ERROR {
+                log::warn!("[gpu] GL error after drawing DMA-BUF texture: {:#x}", gl_error);
+            }
+            
+            self.gl.disable(glow::BLEND);
         }
     }
     
@@ -969,6 +1043,9 @@ impl Drop for GpuRenderer {
         
         unsafe {
             self.gl.delete_program(self.texture_program);
+            if let Some(external) = self.external_program {
+                self.gl.delete_program(external);
+            }
             self.gl.delete_program(self.color_program);
             self.gl.delete_vertex_array(self.quad_vao);
             self.gl.delete_buffer(self.quad_vbo);

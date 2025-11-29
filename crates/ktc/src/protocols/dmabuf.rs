@@ -295,14 +295,14 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 
                 if let Some(data) = buffer.data::<DmaBufBufferData>() {
                     if let Some(plane) = data.planes.first() {
-                        use std::os::fd::AsRawFd;
                         let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
+                        let dup_fd = plane.fd.try_clone().expect("Failed to dup dmabuf fd");
                         let info = crate::state::DmaBufBufferInfo {
                             width: data.width,
                             height: data.height,
                             format: data.format,
                             modifier,
-                            fd: plane.fd.as_raw_fd(),
+                            fd: dup_fd,
                             stride: plane.stride,
                             offset: plane.offset,
                         };
@@ -331,14 +331,14 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 
                 if let Some(data) = buffer.data::<DmaBufBufferData>() {
                     if let Some(plane) = data.planes.first() {
-                        use std::os::fd::AsRawFd;
                         let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
+                        let dup_fd = plane.fd.try_clone().expect("Failed to dup dmabuf fd");
                         let info = crate::state::DmaBufBufferInfo {
                             width: data.width,
                             height: data.height,
                             format: data.format,
                             modifier,
-                            fd: plane.fd.as_raw_fd(),
+                            fd: dup_fd,
                             stride: plane.stride,
                             offset: plane.offset,
                         };

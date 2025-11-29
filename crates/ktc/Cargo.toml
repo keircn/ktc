@@ -25,6 +25,7 @@ gbm.workspace = true
 gbm-sys.workspace = true
 khronos-egl.workspace = true
 glow.workspace = true
+ash.workspace = true
 input.workspace = true
 xkbcommon.workspace = true
 log.workspace = true
