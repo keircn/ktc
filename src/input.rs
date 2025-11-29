@@ -7,7 +7,6 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::time::Instant;
 use std::collections::HashMap;
 use xkbcommon::xkb;
 
@@ -24,7 +23,7 @@ impl LibinputInterface for Interface {
             .open(path)
         {
             Ok(file) => {
-                log::debug!("[input] Opened device: {}", path.display());
+
                 Ok(file.into())
             }
             Err(err) => {
@@ -36,20 +35,6 @@ impl LibinputInterface for Interface {
 
     fn close_restricted(&mut self, fd: OwnedFd) {
         drop(File::from(fd));
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct InputStats {
-    pub motion_events: u32,
-    pub button_events: u32,
-    pub key_events: u32,
-    pub process_time_us: u64,
-}
-
-impl InputStats {
-    pub fn reset(&mut self) {
-        *self = Self::default();
     }
 }
 
@@ -177,9 +162,6 @@ pub struct InputHandler {
     shift: bool,
     super_key: bool,
     frame: InputFrame,
-    stats: InputStats,
-    last_stats_log: Instant,
-    frame_count: u64,
     keybinds: HashMap<String, Keybind>,
 }
 
@@ -224,9 +206,6 @@ impl InputHandler {
             shift: false,
             super_key: false,
             frame: InputFrame::new(),
-            stats: InputStats::default(),
-            last_stats_log: Instant::now(),
-            frame_count: 0,
             keybinds,
         })
     }
@@ -237,14 +216,11 @@ impl InputHandler {
     }
 
     pub fn poll_frame(&mut self) -> &InputFrame {
-        let start = Instant::now();
         self.frame.reset();
-        self.stats.reset();
         
         let mut keyboard_events = Vec::new();
         let mut pointer_events = Vec::new();
         let mut has_keyboard_device = false;
-        let mut raw_motion_count = 0u32;
         
         for event in &mut self.libinput {
             match event {
@@ -263,20 +239,11 @@ impl InputHandler {
                     }
                 }
                 Event::Pointer(pointer_event) => {
-                    if matches!(pointer_event, input::event::PointerEvent::Motion(_)) {
-                        raw_motion_count += 1;
-                    }
                     pointer_events.push(pointer_event);
                 }
                 _ => {}
             }
         }
-        
-        self.stats.motion_events = raw_motion_count;
-        self.stats.button_events = pointer_events.iter()
-            .filter(|e| matches!(e, input::event::PointerEvent::Button(_)))
-            .count() as u32;
-        self.stats.key_events = keyboard_events.len() as u32;
         
         for pointer_event in pointer_events {
             self.handle_pointer_event(pointer_event);
@@ -288,23 +255,6 @@ impl InputHandler {
         
         for (key, state) in keyboard_events {
             self.handle_keyboard_key_batched(key, state);
-        }
-        
-        self.stats.process_time_us = start.elapsed().as_micros() as u64;
-        self.frame_count += 1;
-        
-        if self.last_stats_log.elapsed().as_secs() >= 2 {
-            if self.stats.motion_events > 0 || self.stats.button_events > 0 {
-                log::debug!(
-                    "[input] frame={} motion={} btn={} keys={} time={}us",
-                    self.frame_count,
-                    self.stats.motion_events,
-                    self.stats.button_events,
-                    self.stats.key_events,
-                    self.stats.process_time_us
-                );
-            }
-            self.last_stats_log = Instant::now();
         }
         
         &self.frame

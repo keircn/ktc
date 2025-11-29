@@ -9,7 +9,7 @@ mod renderer;
 use config::Config;
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
-use wayland_server::{Display, ListeningSocket, Resource};
+use wayland_server::{Display, ListeningSocket};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
     wl_seat::WlSeat,
@@ -163,7 +163,7 @@ fn run(config: Config) {
         .into_iter()
         .collect();
     
-    log::debug!("Configured keybinds: {:?}", keybinds);
+
 
     let input_handler = match InputHandler::new(keybinds) {
         Ok(handler) => {
@@ -469,8 +469,6 @@ fn process_input(data: &mut LoopData) {
             
             let serial = data.state.next_keyboard_serial();
             for keyboard in &focused_keyboards {
-                log::debug!("[input] Sending key {} to keyboard {:?} client={:?}", 
-                    key.keycode, keyboard.id(), keyboard.client().map(|c| c.id()));
                 keyboard.key(serial, 0, key.keycode, wl_state);
                 keyboard.modifiers(serial, key.mods_depressed, key.mods_latched, key.mods_locked, key.group);
             }
@@ -596,7 +594,6 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
         
-        // Only release buffers for windows that were actually updated this frame
         for id in &windows_needing_update {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
@@ -630,8 +627,6 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
 }
 
 fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>) {
-    use std::time::Instant;
-    
     if state.needs_relayout {
         state.needs_relayout = false;
         state.relayout_windows();
@@ -656,39 +651,23 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
             }
         } else {
-            let t0 = Instant::now();
             state.canvas.restore_cursor();
             
             let focused_id = state.focused_window;
             
-            let total_windows = state.windows.len();
             let windows_to_render: Vec<_> = state.windows.iter()
                 .filter(|w| w.mapped && w.buffer.is_some())
                 .map(|w| w.id)
                 .collect();
             
-            if windows_to_render.len() != total_windows && total_windows > 0 {
-                log::warn!("[render] Only rendering {} of {} windows", windows_to_render.len(), total_windows);
-                for w in &state.windows {
-                    log::warn!(
-                        "[render] Window {} status: mapped={} has_buffer={} cache={}x{} geom={:?}",
-                        w.id, w.mapped, w.buffer.is_some(), w.cache_width, w.cache_height, w.geometry
-                    );
-                }
-            }
-            
-            let t1 = Instant::now();
             for id in &windows_to_render {
                 state.update_window_pixel_cache(*id);
             }
-            let cache_time = t1.elapsed().as_micros();
 
-            let t2 = Instant::now();
             state.canvas.clear_with_pattern(
                 state.config.background_dark(),
                 state.config.background_light()
             );
-            let clear_time = t2.elapsed().as_micros();
             
             let title_focused = state.config.title_focused();
             let title_unfocused = state.config.title_unfocused();
@@ -696,7 +675,6 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             let border_unfocused = state.config.border_unfocused();
             let title_bar_height = state.config.title_bar_height();
             
-            let t3 = Instant::now();
             for id in &windows_to_render {
                 if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
@@ -707,13 +685,6 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                         if render_width <= 0 || render_height <= 0 {
                             continue;
                         }
-                        
-                        log::debug!(
-                            "[blit] Window {} at ({},{}) size {}x{} cache_ptr={:p} cache_len={} stride={}",
-                            win.id, win.geometry.x, win.geometry.y + title_bar_height,
-                            render_width, render_height,
-                            win.pixel_cache.as_ptr(), win.pixel_cache.len(), win.cache_stride
-                        );
                         
                         state.canvas.draw_decorations(
                             win.geometry.x, win.geometry.y,
@@ -734,7 +705,6 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                     }
                 }
             }
-            let blit_time = t3.elapsed().as_micros();
             
             for id in &windows_to_render {
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
@@ -747,14 +717,6 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             
             if state.cursor_visible {
                 state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
-            }
-            
-            let total = t0.elapsed().as_micros();
-            if total > 5000 {
-                log::debug!(
-                    "[render] total={}us cache={}us clear={}us blit={}us wins={}",
-                    total, cache_time, clear_time, blit_time, windows_to_render.len()
-                );
             }
         }
         
