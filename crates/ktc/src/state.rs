@@ -1039,36 +1039,47 @@ impl State {
     }
     
     pub fn relayout_windows(&mut self) {
-        let num_windows = self.windows.len();
+        let active_workspace = self.active_workspace;
+        let workspace_window_ids: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.workspace == active_workspace)
+            .map(|w| w.id)
+            .collect();
+        
+        let num_windows = workspace_window_ids.len();
         if num_windows == 0 {
             return;
         }
         
         let (screen_width, screen_height) = self.screen_size();
         
-        for (i, window) in self.windows.iter_mut().enumerate() {
-            let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
-            if window.geometry != new_geometry {
-                let old_geom = window.geometry;
-                window.geometry = new_geometry;
-                window.needs_redraw = true;
-                
-                if old_geom.width != new_geometry.width || old_geom.height != new_geometry.height {
-                    window.cache_width = 0;
-                    window.cache_height = 0;
+        for (i, window_id) in workspace_window_ids.iter().enumerate() {
+            if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
+                let new_geometry = calculate_tiling_geometry(i, num_windows, screen_width, screen_height);
+                if window.geometry != new_geometry {
+                    let old_geom = window.geometry;
+                    window.geometry = new_geometry;
+                    window.needs_redraw = true;
+                    
+                    if old_geom.width != new_geometry.width || old_geom.height != new_geometry.height {
+                        window.cache_width = 0;
+                        window.cache_height = 0;
+                    }
                 }
             }
         }
         
         self.damage_tracker.mark_full_damage();
         
-        for i in 0..num_windows {
-            let window_id = self.windows[i].id;
-            let geometry = self.windows[i].geometry;
-            let xdg_surface = self.windows[i].xdg_surface.clone();
-            let xdg_toplevel = self.windows[i].xdg_toplevel.clone();
+        for window_id in &workspace_window_ids {
+            let (geometry, xdg_surface, xdg_toplevel) = {
+                let window = match self.windows.iter().find(|w| w.id == *window_id) {
+                    Some(w) => w,
+                    None => continue,
+                };
+                (window.geometry, window.xdg_surface.clone(), window.xdg_toplevel.clone())
+            };
             
-            let states = self.get_toplevel_states(window_id);
+            let states = self.get_toplevel_states(*window_id);
             let serial = self.next_keyboard_serial();
             
             let title_bar_height = self.config.title_bar_height();
@@ -1153,35 +1164,45 @@ impl State {
     }
     
     pub fn focus_next(&mut self) {
-        if self.windows.is_empty() {
+        let workspace_windows: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.workspace == self.active_workspace && w.mapped)
+            .map(|w| w.id)
+            .collect();
+        
+        if workspace_windows.is_empty() {
             return;
         }
         
         let current_idx = self.focused_window
-            .and_then(|id| self.windows.iter().position(|w| w.id == id))
+            .and_then(|id| workspace_windows.iter().position(|&wid| wid == id))
             .unwrap_or(0);
         
-        let next_idx = (current_idx + 1) % self.windows.len();
-        let next_id = self.windows[next_idx].id;
+        let next_idx = (current_idx + 1) % workspace_windows.len();
+        let next_id = workspace_windows[next_idx];
         
         self.set_focus(next_id);
     }
     
     pub fn focus_prev(&mut self) {
-        if self.windows.is_empty() {
+        let workspace_windows: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.workspace == self.active_workspace && w.mapped)
+            .map(|w| w.id)
+            .collect();
+        
+        if workspace_windows.is_empty() {
             return;
         }
         
         let current_idx = self.focused_window
-            .and_then(|id| self.windows.iter().position(|w| w.id == id))
+            .and_then(|id| workspace_windows.iter().position(|&wid| wid == id))
             .unwrap_or(0);
         
         let prev_idx = if current_idx == 0 {
-            self.windows.len() - 1
+            workspace_windows.len() - 1
         } else {
             current_idx - 1
         };
-        let prev_id = self.windows[prev_idx].id;
+        let prev_id = workspace_windows[prev_idx];
         
         self.set_focus(prev_id);
     }

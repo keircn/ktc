@@ -629,8 +629,9 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let title_unfocused = state.config.title_unfocused();
         let title_bar_height = state.config.title_bar_height();
         let focused_id = state.focused_window;
+        let active_workspace = state.active_workspace;
         let windows_needing_update: Vec<_> = state.windows.iter()
-            .filter(|w| w.mapped && w.buffer.is_some() && w.needs_redraw)
+            .filter(|w| w.mapped && w.buffer.is_some() && w.needs_redraw && w.workspace == active_workspace)
             .map(|w| w.id)
             .collect();
         
@@ -639,7 +640,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         }
         
         let window_render_info: Vec<_> = state.windows.iter()
-            .filter(|w| w.mapped && w.buffer.is_some())
+            .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
             .map(|w| {
                 let buffer_id = w.buffer.as_ref().map(|b| b.id());
                 let is_shm = buffer_id.as_ref().map(|id| state.buffers.contains_key(id)).unwrap_or(false);
@@ -850,9 +851,10 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             state.canvas.restore_cursor();
             
             let focused_id = state.focused_window;
+            let active_workspace = state.active_workspace;
             
             let windows_to_render: Vec<_> = state.windows.iter()
-                .filter(|w| w.mapped && w.buffer.is_some())
+                .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
                 .map(|w| w.id)
                 .collect();
             
