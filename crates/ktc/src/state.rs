@@ -1226,7 +1226,7 @@ impl State {
         
         self.needs_relayout = true;
         self.damage_tracker.mark_full_damage();
-        log::info!("Switched to workspace {}", workspace);
+        log::debug!("Switched to workspace {}", workspace);
     }
     
     pub fn move_window_to_workspace(&mut self, window_id: WindowId, workspace: usize) {
