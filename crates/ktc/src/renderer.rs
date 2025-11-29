@@ -270,7 +270,7 @@ impl GpuRenderer {
         let texture_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_TEXTURE)?;
         let color_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_COLOR)?;
         let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
-        let supported_formats = Self::query_dmabuf_formats();
+        let supported_formats = Self::query_dmabuf_formats(&egl, display);
         log::info!("[gpu] Supported DMA-BUF formats: {}", supported_formats.len());
         let gbm_surface_raw = gbm_surface.as_raw() as *mut std::ffi::c_void;
         std::mem::forget(gbm_surface);
@@ -384,14 +384,113 @@ impl GpuRenderer {
         }
     }
     
-    fn query_dmabuf_formats() -> Vec<DmaBufFormat> {
-        const MOD_INVALID: u64 = 0x00ffffffffffffff;
+    fn query_dmabuf_formats(egl: &egl::DynamicInstance<egl::EGL1_5>, display: egl::Display) -> Vec<DmaBufFormat> {
+        let mut formats = Vec::new();
         
+        type QueryDmaBufFormatsEXT = unsafe extern "C" fn(
+            egl::Display,
+            i32,
+            *mut i32,
+            *mut i32,
+        ) -> u32;
+        
+        type QueryDmaBufModifiersEXT = unsafe extern "C" fn(
+            egl::Display,
+            i32,
+            i32,
+            *mut u64,
+            *mut u32,
+            *mut i32,
+        ) -> u32;
+        
+        let query_formats: Option<QueryDmaBufFormatsEXT> = egl.get_proc_address("eglQueryDmaBufFormatsEXT")
+            .map(|p| unsafe { std::mem::transmute(p) });
+        let query_modifiers: Option<QueryDmaBufModifiersEXT> = egl.get_proc_address("eglQueryDmaBufModifiersEXT")
+            .map(|p| unsafe { std::mem::transmute(p) });
+        
+        let (query_formats, query_modifiers) = match (query_formats, query_modifiers) {
+            (Some(f), Some(m)) => (f, m),
+            _ => {
+                log::warn!("[gpu] EGL_EXT_image_dma_buf_import_modifiers not available, using fallback formats");
+                return Self::fallback_dmabuf_formats();
+            }
+        };
+        
+        let mut num_formats: i32 = 0;
+        let result = unsafe { query_formats(display, 0, std::ptr::null_mut(), &mut num_formats) };
+        if result == 0 || num_formats <= 0 {
+            log::warn!("[gpu] eglQueryDmaBufFormatsEXT failed, using fallback formats");
+            return Self::fallback_dmabuf_formats();
+        }
+        
+        let mut format_list = vec![0i32; num_formats as usize];
+        let result = unsafe { query_formats(display, num_formats, format_list.as_mut_ptr(), &mut num_formats) };
+        if result == 0 {
+            log::warn!("[gpu] eglQueryDmaBufFormatsEXT (get) failed, using fallback formats");
+            return Self::fallback_dmabuf_formats();
+        }
+        
+        log::info!("[gpu] EGL reports {} DMA-BUF formats", num_formats);
+        
+        for &format in &format_list {
+            let mut num_modifiers: i32 = 0;
+            let result = unsafe {
+                query_modifiers(display, format, 0, std::ptr::null_mut(), std::ptr::null_mut(), &mut num_modifiers)
+            };
+            
+            if result == 0 || num_modifiers <= 0 {
+                formats.push(DmaBufFormat {
+                    format: format as u32,
+                    modifier: drm_fourcc::DrmModifier::Invalid.into(),
+                });
+                continue;
+            }
+            
+            let mut modifiers = vec![0u64; num_modifiers as usize];
+            let mut external_only = vec![0u32; num_modifiers as usize];
+            let result = unsafe {
+                query_modifiers(
+                    display,
+                    format,
+                    num_modifiers,
+                    modifiers.as_mut_ptr(),
+                    external_only.as_mut_ptr(),
+                    &mut num_modifiers,
+                )
+            };
+            
+            if result == 0 {
+                formats.push(DmaBufFormat {
+                    format: format as u32,
+                    modifier: drm_fourcc::DrmModifier::Invalid.into(),
+                });
+                continue;
+            }
+            
+            for (i, &modifier) in modifiers.iter().enumerate() {
+                if external_only.get(i).copied().unwrap_or(0) == 0 {
+                    formats.push(DmaBufFormat {
+                        format: format as u32,
+                        modifier,
+                    });
+                }
+            }
+        }
+        
+        if formats.is_empty() {
+            log::warn!("[gpu] No DMA-BUF formats found via EGL, using fallback");
+            return Self::fallback_dmabuf_formats();
+        }
+        
+        formats
+    }
+    
+    fn fallback_dmabuf_formats() -> Vec<DmaBufFormat> {
         vec![
-            DmaBufFormat { format: drm_fourcc::DrmFourcc::Argb8888 as u32, modifier: MOD_INVALID },
-            DmaBufFormat { format: drm_fourcc::DrmFourcc::Xrgb8888 as u32, modifier: MOD_INVALID },
-            DmaBufFormat { format: drm_fourcc::DrmFourcc::Abgr8888 as u32, modifier: MOD_INVALID },
-            DmaBufFormat { format: drm_fourcc::DrmFourcc::Xbgr8888 as u32, modifier: MOD_INVALID },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Argb8888 as u32, modifier: drm_fourcc::DrmModifier::Invalid.into() },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Xrgb8888 as u32, modifier: drm_fourcc::DrmModifier::Invalid.into() },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Abgr8888 as u32, modifier: drm_fourcc::DrmModifier::Invalid.into() },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Xbgr8888 as u32, modifier: drm_fourcc::DrmModifier::Invalid.into() },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Argb8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Xrgb8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Abgr8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
