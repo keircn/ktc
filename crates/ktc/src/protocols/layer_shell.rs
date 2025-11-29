@@ -225,20 +225,24 @@ impl State {
             screen_height
         };
 
-        let x = if anchored_left && !anchored_right {
+        let x = if anchored_left && anchored_right {
+            margin.3
+        } else if anchored_left && !anchored_right {
             margin.3
         } else if anchored_right && !anchored_left {
             screen_width - width - margin.1
         } else {
-            margin.3
+            (screen_width - width) / 2
         };
 
-        let y = if anchored_top && !anchored_bottom {
+        let y = if anchored_top && anchored_bottom {
+            margin.0
+        } else if anchored_top && !anchored_bottom {
             margin.0
         } else if anchored_bottom && !anchored_top {
             screen_height - height - margin.2
         } else {
-            margin.0
+            (screen_height - height) / 2
         };
 
         if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {

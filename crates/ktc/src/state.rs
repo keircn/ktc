@@ -1602,6 +1602,23 @@ impl State {
         }
     }
     
+    pub fn focus_layer_surface(&mut self, surface_id: wayland_server::backend::ObjectId) {
+        let ls_info = self.layer_surfaces.iter()
+            .find(|ls| ls.wl_surface.id() == surface_id)
+            .map(|ls| (ls.wl_surface.clone(), ls.wl_surface.client()));
+        
+        if let Some((surface, Some(client))) = ls_info {
+            let serial = self.next_keyboard_serial();
+            
+            for keyboard in self.keyboards.iter() {
+                if keyboard.client().as_ref() == Some(&client) {
+                    keyboard.enter(serial, &surface, vec![]);
+                    log::debug!("[layer_shell] Sent keyboard.enter to layer surface");
+                }
+            }
+        }
+    }
+    
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
         let id = pool.id();
         self.shm_pools.insert(id, ShmPoolData { fd, size, mmap_ptr: None });
@@ -1861,6 +1878,19 @@ impl State {
     }
     
     pub fn get_focused_keyboards(&self) -> Vec<WlKeyboard> {
+        use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::KeyboardInteractivity;
+        
+        for ls in &self.layer_surfaces {
+            if ls.mapped && ls.keyboard_interactivity == KeyboardInteractivity::Exclusive {
+                if let Some(client) = ls.wl_surface.client() {
+                    return self.keyboards.iter()
+                        .filter(|kb| kb.client().as_ref() == Some(&client))
+                        .cloned()
+                        .collect();
+                }
+            }
+        }
+        
         let focused_id = match self.focused_window {
             Some(id) => id,
             None => return vec![],

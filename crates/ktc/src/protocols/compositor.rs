@@ -73,7 +73,7 @@ impl Dispatch<WlSurface, ()> for State {
                     window.mapped = window.buffer.is_some();
                     state.mark_surface_damage(surface_id.clone());
                 } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
-                    let (needs_initial_configure, needs_map) = {
+                    let (needs_initial_configure, needs_map, needs_keyboard_focus) = {
                         let ls = state.layer_surfaces.iter_mut()
                             .find(|ls| ls.wl_surface.id() == surface_id);
                         if let Some(ls) = ls {
@@ -86,9 +86,14 @@ impl Dispatch<WlSurface, ()> for State {
                             let was_mapped = ls.mapped;
                             ls.mapped = ls.buffer.is_some();
                             ls.needs_redraw = true;
-                            (needs_initial, !was_mapped && ls.mapped)
+                            
+                            use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::KeyboardInteractivity;
+                            let needs_kb = !was_mapped && ls.mapped && 
+                                ls.keyboard_interactivity == KeyboardInteractivity::Exclusive;
+                            
+                            (needs_initial, !was_mapped && ls.mapped, needs_kb)
                         } else {
-                            (false, false)
+                            (false, false, false)
                         }
                     };
                     
@@ -99,6 +104,11 @@ impl Dispatch<WlSurface, ()> for State {
                     if needs_map {
                         state.damage_tracker.mark_full_damage();
                     }
+                    
+                    if needs_keyboard_focus {
+                        state.focus_layer_surface(surface_id.clone());
+                    }
+                    
                     state.mark_layer_surface_damage(surface_id);
                 }
             }
