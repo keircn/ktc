@@ -66,19 +66,11 @@ impl Dispatch<WlSurface, ()> for State {
             wl_surface::Request::Commit => {
                 let surface_id = resource.id();
                 if let Some(window) = state.get_window_by_surface(resource) {
-                    let mut buffer_changed = false;
                     if let Some(buffer) = window.pending_buffer.take() {
-                        let new_buffer_id = buffer.id().protocol_id();
-                        buffer_changed = window.last_buffer_id != new_buffer_id;
-                        window.last_buffer_id = new_buffer_id;
                         window.buffer = Some(buffer);
-                    }
-                    let was_mapped = window.mapped;
-                    window.mapped = window.buffer.is_some();
-                    
-                    if buffer_changed || !was_mapped {
                         window.needs_redraw = true;
                     }
+                    window.mapped = window.buffer.is_some();
                 }
                 state.mark_surface_damage(surface_id);
             }
