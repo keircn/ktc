@@ -37,6 +37,14 @@ fn default_bindings() -> Vec<KeybindEntry> {
         KeybindEntry { key: "mod+j".to_string(), action: "focus_next".to_string() },
         KeybindEntry { key: "mod+k".to_string(), action: "focus_prev".to_string() },
         KeybindEntry { key: "mod+shift+q".to_string(), action: "close_window".to_string() },
+        KeybindEntry { key: "mod+1".to_string(), action: "workspace 1".to_string() },
+        KeybindEntry { key: "mod+2".to_string(), action: "workspace 2".to_string() },
+        KeybindEntry { key: "mod+3".to_string(), action: "workspace 3".to_string() },
+        KeybindEntry { key: "mod+4".to_string(), action: "workspace 4".to_string() },
+        KeybindEntry { key: "mod+shift+1".to_string(), action: "move_to_workspace 1".to_string() },
+        KeybindEntry { key: "mod+shift+2".to_string(), action: "move_to_workspace 2".to_string() },
+        KeybindEntry { key: "mod+shift+3".to_string(), action: "move_to_workspace 3".to_string() },
+        KeybindEntry { key: "mod+shift+4".to_string(), action: "move_to_workspace 4".to_string() },
     ]
 }
 

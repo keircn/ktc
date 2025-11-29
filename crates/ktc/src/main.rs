@@ -1,6 +1,7 @@
 mod state;
 mod protocols;
 mod input;
+mod ipc;
 mod logging;
 mod session;
 mod config;
@@ -297,6 +298,17 @@ fn run(config: Config) {
                 }
                 let input_time = input_start.elapsed().as_micros() as u64;
                 
+                if data.ipc_pending {
+                    data.ipc_pending = false;
+                    process_ipc(data);
+                }
+                
+                if let Some(title) = data.state.pending_title_change.take() {
+                    if let Some(ref mut ipc) = data.ipc_server {
+                        ipc.notify_title_change(title);
+                    }
+                }
+                
                 if data.vsync_pending {
                     data.vsync_pending = false;
                     if let Some(ref mut gpu) = data.state.gpu_renderer {
@@ -341,14 +353,44 @@ fn run(config: Config) {
         )
         .expect("Failed to insert timer");
 
+    let ipc_server = match ipc::IpcServer::new() {
+        Ok(server) => {
+            let ipc_fd = server.fd().try_clone_to_owned()
+                .expect("Failed to clone IPC fd");
+            
+            calloop_loop
+                .handle()
+                .insert_source(
+                    calloop::generic::Generic::new(
+                        ipc_fd,
+                        calloop::Interest::READ,
+                        calloop::Mode::Level,
+                    ),
+                    |_, _, data| {
+                        data.ipc_pending = true;
+                        Ok(calloop::PostAction::Continue)
+                    },
+                )
+                .expect("Failed to insert IPC source");
+            
+            Some(server)
+        }
+        Err(e) => {
+            log::warn!("Failed to initialize IPC server: {}", e);
+            None
+        }
+    };
+
     let mut loop_data = LoopData {
         display,
         state: State::new(config),
         drm_info,
         input_handler,
+        ipc_server,
         socket_name,
         input_pending: false,
         vsync_pending: false,
+        ipc_pending: false,
         frame_profiler: FrameProfiler::new(),
     };
     
@@ -437,12 +479,30 @@ fn process_input(data: &mut LoopData) {
     }
     
     if frame.focus_next {
+        let old_focus = data.state.focused_window;
         data.state.focus_next();
+        if data.state.focused_window != old_focus {
+            if let Some(ref mut ipc) = data.ipc_server {
+                let focused_title = data.state.focused_window
+                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                    .map(|w| w.title.clone());
+                ipc.notify_focus_change(focused_title);
+            }
+        }
         data.display.flush_clients().ok();
     }
     
     if frame.focus_prev {
+        let old_focus = data.state.focused_window;
         data.state.focus_prev();
+        if data.state.focused_window != old_focus {
+            if let Some(ref mut ipc) = data.ipc_server {
+                let focused_title = data.state.focused_window
+                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                    .map(|w| w.title.clone());
+                ipc.notify_focus_change(focused_title);
+            }
+        }
         data.display.flush_clients().ok();
     }
     
@@ -451,6 +511,34 @@ fn process_input(data: &mut LoopData) {
             data.state.close_window(focused_id);
             data.display.flush_clients().ok();
         }
+    }
+    
+    if let Some(workspace) = frame.switch_workspace {
+        let old_workspace = data.state.active_workspace;
+        data.state.switch_workspace(workspace);
+        if data.state.active_workspace != old_workspace {
+            if let Some(ref mut ipc) = data.ipc_server {
+                let workspaces = get_workspace_info(&data.state);
+                ipc.notify_workspace_change(workspaces, data.state.active_workspace);
+                
+                let focused_title = data.state.focused_window
+                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                    .map(|w| w.title.clone());
+                ipc.notify_focus_change(focused_title);
+            }
+        }
+        data.display.flush_clients().ok();
+    }
+    
+    if let Some(workspace) = frame.move_to_workspace {
+        if let Some(focused_id) = data.state.focused_window {
+            data.state.move_window_to_workspace(focused_id, workspace);
+            if let Some(ref mut ipc) = data.ipc_server {
+                let workspaces = get_workspace_info(&data.state);
+                ipc.notify_workspace_change(workspaces, data.state.active_workspace);
+            }
+        }
+        data.display.flush_clients().ok();
     }
     
     if frame.pointer.has_motion {
@@ -468,7 +556,16 @@ fn process_input(data: &mut LoopData) {
     }
     
     for button in &frame.buttons {
+        let old_focus = data.state.focused_window;
         data.state.handle_pointer_button(button.button, button.pressed);
+        if button.pressed && data.state.focused_window != old_focus {
+            if let Some(ref mut ipc) = data.ipc_server {
+                let focused_title = data.state.focused_window
+                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                    .map(|w| w.title.clone());
+                ipc.notify_focus_change(focused_title);
+            }
+        }
     }
     
     if frame.pointer.has_scroll {
@@ -817,9 +914,11 @@ struct LoopData {
     state: State,
     drm_info: Option<DrmInfo>,
     input_handler: Option<input::InputHandler>,
+    ipc_server: Option<ipc::IpcServer>,
     socket_name: String,
     input_pending: bool,
     vsync_pending: bool,
+    ipc_pending: bool,
     frame_profiler: FrameProfiler,
 }
 
@@ -936,6 +1035,50 @@ impl FrameProfiler {
             state.windows.len()
         );
     }
+}
+
+fn process_ipc(data: &mut LoopData) {
+    let ipc = match data.ipc_server.as_mut() {
+        Some(s) => s,
+        None => return,
+    };
+    
+    ipc.accept_connections();
+    
+    let commands = ipc.poll_commands();
+    for cmd in commands {
+        match cmd {
+            ktc_common::IpcCommand::GetState => {
+                let workspaces = get_workspace_info(&data.state);
+                let active = data.state.active_workspace;
+                let focused_title = data.state.focused_window
+                    .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
+                    .map(|w| w.title.clone());
+                ipc.send_state(workspaces, active, focused_title);
+            }
+            ktc_common::IpcCommand::SwitchWorkspace { workspace } => {
+                data.state.switch_workspace(workspace);
+                let workspaces = get_workspace_info(&data.state);
+                ipc.notify_workspace_change(workspaces, workspace);
+            }
+        }
+    }
+}
+
+fn get_workspace_info(state: &State) -> Vec<ktc_common::WorkspaceInfo> {
+    (1..=state.workspace_count)
+        .map(|id| {
+            let window_count = state.windows.iter()
+                .filter(|w| w.workspace == id && w.mapped)
+                .count();
+            ktc_common::WorkspaceInfo {
+                id,
+                name: id.to_string(),
+                window_count,
+                urgent: false,
+            }
+        })
+        .collect()
 }
 
 struct DrmInfo {

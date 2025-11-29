@@ -595,6 +595,8 @@ pub struct Window {
     pub cache_width: usize,
     pub cache_height: usize,
     pub cache_stride: usize,
+    pub title: String,
+    pub workspace: usize,
 }
 
 pub type LayerSurfaceId = u64;
@@ -675,6 +677,10 @@ pub struct State {
 
     pub damage_tracker: DamageTracker,
     pub last_cursor_pos: (i32, i32),
+    
+    pub active_workspace: usize,
+    pub workspace_count: usize,
+    pub pending_title_change: Option<String>,
 }
 
 impl Drop for State {
@@ -770,6 +776,9 @@ impl State {
             screencopy_frames: Vec::new(),
             damage_tracker: DamageTracker::new(),
             last_cursor_pos: (0, 0),
+            active_workspace: 1,
+            workspace_count: 4,
+            pending_title_change: None,
         }
     }
     
@@ -1019,6 +1028,8 @@ impl State {
             cache_width: 0,
             cache_height: 0,
             cache_stride: 0,
+            title: String::new(),
+            workspace: self.active_workspace,
         });
         
         self.damage_tracker.mark_full_damage();
@@ -1172,6 +1183,46 @@ impl State {
         let prev_id = self.windows[prev_idx].id;
         
         self.set_focus(prev_id);
+    }
+    
+    pub fn switch_workspace(&mut self, workspace: usize) {
+        if workspace < 1 || workspace > self.workspace_count {
+            return;
+        }
+        
+        self.active_workspace = workspace;
+        
+        let first_window = self.windows.iter()
+            .find(|w| w.workspace == workspace && w.mapped)
+            .map(|w| w.id);
+        
+        if let Some(id) = first_window {
+            self.set_focus(id);
+        } else {
+            self.focused_window = None;
+        }
+        
+        self.needs_relayout = true;
+        self.damage_tracker.mark_full_damage();
+        log::info!("Switched to workspace {}", workspace);
+    }
+    
+    pub fn move_window_to_workspace(&mut self, window_id: WindowId, workspace: usize) {
+        if workspace < 1 || workspace > self.workspace_count {
+            return;
+        }
+        
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            window.workspace = workspace;
+            self.needs_relayout = true;
+            self.damage_tracker.mark_full_damage();
+        }
+    }
+    
+    pub fn set_window_title(&mut self, window_id: WindowId, title: String) {
+        if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            window.title = title;
+        }
     }
     
     pub fn set_focus(&mut self, window_id: WindowId) {

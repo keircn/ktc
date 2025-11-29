@@ -102,14 +102,42 @@ impl Dispatch<XdgSurface, ()> for State {
 
 impl Dispatch<XdgToplevel, ()> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
-        _resource: &XdgToplevel,
-        _request: xdg_toplevel::Request,
+        resource: &XdgToplevel,
+        request: xdg_toplevel::Request,
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+        match request {
+            xdg_toplevel::Request::SetTitle { title } => {
+                if let Some(window) = state.windows.iter_mut().find(|w| w.xdg_toplevel.id() == resource.id()) {
+                    let old_title = window.title.clone();
+                    window.title = title.clone();
+                    let window_id = window.id;
+                    let is_focused = state.focused_window == Some(window_id);
+                    
+                    if is_focused && old_title != title {
+                        state.pending_title_change = Some(title);
+                    }
+                }
+            }
+            xdg_toplevel::Request::SetAppId { .. } => {}
+            xdg_toplevel::Request::SetParent { .. } => {}
+            xdg_toplevel::Request::ShowWindowMenu { .. } => {}
+            xdg_toplevel::Request::Move { .. } => {}
+            xdg_toplevel::Request::Resize { .. } => {}
+            xdg_toplevel::Request::SetMaxSize { .. } => {}
+            xdg_toplevel::Request::SetMinSize { .. } => {}
+            xdg_toplevel::Request::SetMaximized => {}
+            xdg_toplevel::Request::UnsetMaximized => {}
+            xdg_toplevel::Request::SetFullscreen { .. } => {}
+            xdg_toplevel::Request::UnsetFullscreen => {}
+            xdg_toplevel::Request::SetMinimized => {}
+            _ => {}
+        }
+    }
 }
 
 impl Dispatch<XdgPopup, ()> for State {

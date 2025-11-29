@@ -122,6 +122,8 @@ pub struct InputFrame {
     pub focus_next: bool,
     pub focus_prev: bool,
     pub close_window: bool,
+    pub switch_workspace: Option<usize>,
+    pub move_to_workspace: Option<usize>,
 }
 
 impl InputFrame {
@@ -138,6 +140,8 @@ impl InputFrame {
         self.focus_next = false;
         self.focus_prev = false;
         self.close_window = false;
+        self.switch_workspace = None;
+        self.move_to_workspace = None;
     }
 
     pub fn has_events(&self) -> bool {
@@ -150,6 +154,8 @@ impl InputFrame {
             || self.focus_next
             || self.focus_prev
             || self.close_window
+            || self.switch_workspace.is_some()
+            || self.move_to_workspace.is_some()
     }
 }
 
@@ -353,6 +359,16 @@ impl InputHandler {
                         } else if action == "close_window" {
                             self.frame.close_window = true;
                             return;
+                        } else if let Some(ws) = action.strip_prefix("workspace ") {
+                            if let Ok(num) = ws.trim().parse::<usize>() {
+                                self.frame.switch_workspace = Some(num);
+                                return;
+                            }
+                        } else if let Some(ws) = action.strip_prefix("move_to_workspace ") {
+                            if let Ok(num) = ws.trim().parse::<usize>() {
+                                self.frame.move_to_workspace = Some(num);
+                                return;
+                            }
                         } else if let Some(cmd) = action.strip_prefix("exec ") {
                             self.frame.exec_command = Some(cmd.to_string());
                             return;

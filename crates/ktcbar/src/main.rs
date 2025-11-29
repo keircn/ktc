@@ -6,15 +6,60 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
 };
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsFd;
+use std::os::unix::net::UnixStream;
 use chrono::Local;
-use ktc_common::Font;
+use ktc_common::{Font, IpcCommand, IpcEvent, WorkspaceInfo, ipc_socket_path};
 
 const BAR_HEIGHT: u32 = 24;
 const BG_COLOR: u32 = 0xFF1A1A2E;
 const TEXT_COLOR: u32 = 0xFFE0E0E0;
 const ACTIVE_WS_COLOR: u32 = 0xFF4A9EFF;
 const INACTIVE_WS_COLOR: u32 = 0xFF505050;
+const WS_HAS_WINDOWS_COLOR: u32 = 0xFF808080;
+
+struct IpcClient {
+    stream: UnixStream,
+    reader: BufReader<UnixStream>,
+}
+
+impl IpcClient {
+    fn connect() -> Option<Self> {
+        let path = ipc_socket_path();
+        let stream = UnixStream::connect(&path).ok()?;
+        stream.set_nonblocking(true).ok()?;
+        let reader = BufReader::new(stream.try_clone().ok()?);
+        Some(Self { stream, reader })
+    }
+    
+    fn send_command(&mut self, cmd: &IpcCommand) {
+        if let Ok(json) = serde_json::to_string(cmd) {
+            let _ = writeln!(self.stream, "{}", json);
+        }
+    }
+    
+    fn poll_events(&mut self) -> Vec<IpcEvent> {
+        let mut events = Vec::new();
+        let mut line = String::new();
+        
+        loop {
+            line.clear();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Ok(event) = serde_json::from_str::<IpcEvent>(line.trim()) {
+                        events.push(event);
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+        
+        events
+    }
+}
 
 struct AppState {
     compositor: Option<wl_compositor::WlCompositor>,
@@ -28,13 +73,18 @@ struct AppState {
     height: u32,
     running: bool,
     font: Font,
+    workspaces: Vec<WorkspaceInfo>,
     active_workspace: usize,
-    workspace_count: usize,
+    focused_title: Option<String>,
     needs_redraw: bool,
+    ipc_client: Option<IpcClient>,
 }
 
 impl AppState {
     fn new() -> Self {
+        let ipc_client = IpcClient::connect();
+        let workspaces = (1..=4).map(WorkspaceInfo::new).collect();
+        
         Self {
             compositor: None,
             layer_shell: None,
@@ -47,9 +97,49 @@ impl AppState {
             height: BAR_HEIGHT,
             running: true,
             font: Font::new(2),
+            workspaces,
             active_workspace: 1,
-            workspace_count: 4,
+            focused_title: None,
             needs_redraw: false,
+            ipc_client,
+        }
+    }
+    
+    fn request_state(&mut self) {
+        if let Some(ref mut ipc) = self.ipc_client {
+            ipc.send_command(&IpcCommand::GetState);
+        }
+    }
+    
+    fn poll_ipc(&mut self) {
+        let events = if let Some(ref mut ipc) = self.ipc_client {
+            ipc.poll_events()
+        } else {
+            return;
+        };
+        
+        for event in events {
+            match event {
+                IpcEvent::State { workspaces, active_workspace, focused_window } => {
+                    self.workspaces = workspaces;
+                    self.active_workspace = active_workspace;
+                    self.focused_title = focused_window;
+                    self.needs_redraw = true;
+                }
+                IpcEvent::WorkspaceChanged { workspaces, active_workspace } => {
+                    self.workspaces = workspaces;
+                    self.active_workspace = active_workspace;
+                    self.needs_redraw = true;
+                }
+                IpcEvent::FocusChanged { window_title } => {
+                    self.focused_title = window_title;
+                    self.needs_redraw = true;
+                }
+                IpcEvent::TitleChanged { window_title } => {
+                    self.focused_title = Some(window_title);
+                    self.needs_redraw = true;
+                }
+            }
         }
     }
 
@@ -141,6 +231,7 @@ impl AppState {
         let text_y = (self.height as usize - self.font.char_height()) / 2;
 
         self.draw_workspaces(pixels, stride, padding, text_y);
+        self.draw_title(pixels, stride, text_y);
         self.draw_clock(pixels, stride, self.width as usize - padding, text_y);
     }
 
@@ -148,20 +239,40 @@ impl AppState {
         let mut current_x = x;
         let ws_width = self.font.char_width() + 8;
 
-        for i in 1..=self.workspace_count {
-            let color = if i == self.active_workspace {
+        for ws in &self.workspaces {
+            let is_active = ws.id == self.active_workspace;
+            let has_windows = ws.window_count > 0;
+            
+            let color = if is_active {
                 ACTIVE_WS_COLOR
+            } else if has_windows {
+                WS_HAS_WINDOWS_COLOR
             } else {
                 INACTIVE_WS_COLOR
             };
 
-            if i == self.active_workspace {
+            if is_active {
                 fill_rect(pixels, stride, self.height as usize, current_x - 2, y - 2, ws_width, self.font.char_height() + 4, 0xFF2D3A4A);
             }
 
-            let num = char::from_digit(i as u32, 10).unwrap_or('?');
+            let num = char::from_digit(ws.id as u32, 10).unwrap_or('?');
             self.font.draw_char(pixels, stride, current_x + 2, y, num, color);
             current_x += ws_width + 4;
+        }
+    }
+    
+    fn draw_title(&self, pixels: &mut [u32], stride: usize, y: usize) {
+        if let Some(ref title) = self.focused_title {
+            let max_title_len = 40;
+            let title = if title.len() > max_title_len {
+                format!("{}...", &title[..max_title_len - 3])
+            } else {
+                title.clone()
+            };
+            
+            let title_width = self.font.text_width(&title);
+            let center_x = (self.width as usize / 2).saturating_sub(title_width / 2);
+            self.font.draw_text(pixels, stride, center_x, y, &title, TEXT_COLOR);
         }
     }
 
@@ -384,17 +495,21 @@ fn main() {
     event_queue.roundtrip(&mut state).expect("Roundtrip failed");
 
     state.create_layer_surface(&qh);
+    
+    state.request_state();
 
     event_queue.roundtrip(&mut state).expect("Roundtrip failed");
 
     use std::time::{Duration, Instant};
-    let mut last_update = Instant::now();
-    let update_interval = Duration::from_secs(1);
+    let mut last_clock_update = Instant::now();
+    let clock_interval = Duration::from_secs(1);
 
     while state.running {
-        if last_update.elapsed() >= update_interval {
+        state.poll_ipc();
+        
+        if last_clock_update.elapsed() >= clock_interval {
             state.needs_redraw = true;
-            last_update = Instant::now();
+            last_clock_update = Instant::now();
         }
 
         if let Err(e) = event_queue.dispatch_pending(&mut state) {
