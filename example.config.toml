@@ -65,7 +65,8 @@ size = 24
 mod_key = "alt"
 
 # Keybinds use [[keybinds.bind]] format with key and action
-# Actions: exit, focus_next, focus_prev, close_window, exec <command>
+# Actions: exit, focus_next, focus_prev, close_window, exec <command>,
+#          workspace <n>, move_to_workspace <n>
 
 [[keybinds.bind]]
 key = "ctrl+alt+q"
@@ -86,6 +87,40 @@ action = "focus_prev"
 [[keybinds.bind]]
 key = "mod+shift+q"
 action = "close_window"
+
+# Workspace switching
+[[keybinds.bind]]
+key = "mod+1"
+action = "workspace 1"
+
+[[keybinds.bind]]
+key = "mod+2"
+action = "workspace 2"
+
+[[keybinds.bind]]
+key = "mod+3"
+action = "workspace 3"
+
+[[keybinds.bind]]
+key = "mod+4"
+action = "workspace 4"
+
+# Move window to workspace
+[[keybinds.bind]]
+key = "mod+shift+1"
+action = "move_to_workspace 1"
+
+[[keybinds.bind]]
+key = "mod+shift+2"
+action = "move_to_workspace 2"
+
+[[keybinds.bind]]
+key = "mod+shift+3"
+action = "move_to_workspace 3"
+
+[[keybinds.bind]]
+key = "mod+shift+4"
+action = "move_to_workspace 4"
 
 [debug]
 # Show on-screen profiler overlay (FPS, frame time, memory usage)
