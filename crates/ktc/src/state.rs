@@ -1187,6 +1187,12 @@ impl State {
         }
     }
     
+    pub fn kill_window(&mut self, id: WindowId) -> Option<wayland_server::Client> {
+        self.windows.iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.wl_surface.client())
+    }
+    
     pub fn focus_next(&mut self) {
         let workspace_windows: Vec<WindowId> = self.windows.iter()
             .filter(|w| w.workspace == self.active_workspace && w.mapped)
