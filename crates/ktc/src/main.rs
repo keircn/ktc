@@ -803,8 +803,11 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             .map(|w| w.id)
             .collect();
         
+        let mut windows_cache_updated: Vec<u64> = Vec::new();
         for id in &windows_needing_update {
-            state.update_window_pixel_cache(*id);
+            if state.update_window_pixel_cache(*id) {
+                windows_cache_updated.push(*id);
+            }
         }
         
         let window_render_info: Vec<_> = state.windows.iter()
@@ -910,8 +913,11 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             .map(|ls| ls.id)
             .collect();
         
+        let mut layer_surfaces_cache_updated: Vec<u64> = Vec::new();
         for id in &layer_surfaces_needing_update {
-            state.update_layer_surface_pixel_cache(*id);
+            if state.update_layer_surface_pixel_cache(*id) {
+                layer_surfaces_cache_updated.push(*id);
+            }
         }
         
         let layer_render_info: Vec<_> = state.layer_surfaces.iter()
@@ -949,10 +955,10 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             );
         }
         
-        for id in &layer_surfaces_needing_update {
+        for id in &layer_surfaces_cache_updated {
             if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
                 ls.needs_redraw = false;
-                if let Some(ref buffer) = ls.buffer {
+                if let Some(buffer) = ls.buffer.take() {
                     buffer.release();
                 }
             }
@@ -966,11 +972,26 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
         
-        for id in &windows_needing_update {
+        for id in &windows_cache_updated {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
-                if let Some(ref buffer) = win.buffer {
+                if let Some(buffer) = win.buffer.take() {
                     buffer.release();
+                }
+            }
+        }
+        
+        for (id, _, _, _, _, is_shm, buffer_id, _) in &window_render_info {
+            if !is_shm {
+                if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
+                    if win.needs_redraw {
+                        win.needs_redraw = false;
+                        if buffer_id.is_some() {
+                            if let Some(buffer) = win.buffer.take() {
+                                buffer.release();
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1033,8 +1054,11 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 .map(|w| (w.id, w.fullscreen))
                 .collect();
             
+            let mut windows_cache_updated: Vec<u64> = Vec::new();
             for (id, _) in &windows_to_render {
-                state.update_window_pixel_cache(*id);
+                if state.update_window_pixel_cache(*id) {
+                    windows_cache_updated.push(*id);
+                }
             }
 
             state.canvas.clear_with_pattern(
@@ -1098,10 +1122,10 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 }
             }
             
-            for (id, _) in &windows_to_render {
+            for id in &windows_cache_updated {
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                     win.needs_redraw = false;
-                    if let Some(ref buffer) = win.buffer {
+                    if let Some(buffer) = win.buffer.take() {
                         buffer.release();
                     }
                 }
@@ -1112,8 +1136,11 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 .map(|ls| ls.id)
                 .collect();
             
+            let mut layer_surfaces_cache_updated: Vec<u64> = Vec::new();
             for id in &layer_surfaces_to_render {
-                state.update_layer_surface_pixel_cache(*id);
+                if state.update_layer_surface_pixel_cache(*id) {
+                    layer_surfaces_cache_updated.push(*id);
+                }
             }
             
             for id in &layer_surfaces_to_render {
@@ -1138,10 +1165,10 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 }
             }
             
-            for id in &layer_surfaces_to_render {
+            for id in &layer_surfaces_cache_updated {
                 if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
                     ls.needs_redraw = false;
-                    if let Some(ref buffer) = ls.buffer {
+                    if let Some(buffer) = ls.buffer.take() {
                         buffer.release();
                     }
                 }
