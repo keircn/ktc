@@ -42,7 +42,7 @@ fn main() {
     logging::FileLogger::init().expect("Failed to initialize logging");
     
     let config = Config::load();
-    log::debug!("Config: {:?}", config);
+
     
     log::info!("Starting KTC compositor");
     run(config);
@@ -518,8 +518,8 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             .map(|w| w.id)
             .collect();
         
-        for id in windows_needing_update {
-            state.update_window_pixel_cache(id);
+        for id in &windows_needing_update {
+            state.update_window_pixel_cache(*id);
         }
         
         let window_ids: Vec<_> = state.windows.iter()
@@ -596,7 +596,8 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
         
-        for id in &window_ids {
+        // Only release buffers for windows that were actually updated this frame
+        for id in &windows_needing_update {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
                 if let Some(ref buffer) = win.buffer {

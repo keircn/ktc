@@ -62,20 +62,11 @@ impl Dispatch<WlSurface, ()> for State {
             wl_surface::Request::Commit => {
                 let surface_id = resource.id();
                 if let Some(window) = state.get_window_by_surface(resource) {
-                    let had_pending = window.pending_buffer_set;
-                    let old_buffer_id = window.buffer.as_ref().map(|b| b.id());
-                    
                     if window.pending_buffer_set {
                         window.buffer = window.pending_buffer.take();
                         window.pending_buffer_set = false;
                     }
                     window.mapped = window.buffer.is_some();
-                    
-                    let new_buffer_id = window.buffer.as_ref().map(|b| b.id());
-                    log::debug!(
-                        "[commit] window={} pending_set={} old_buf={:?} new_buf={:?}",
-                        window.id, had_pending, old_buffer_id, new_buffer_id
-                    );
                 }
                 state.mark_surface_damage(surface_id);
             }
