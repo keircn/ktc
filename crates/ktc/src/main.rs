@@ -316,6 +316,10 @@ fn run(config: Config) {
                 
                 data.display.dispatch_clients(&mut data.state).ok();
                 
+                if data.state.cleanup_dead_windows() {
+                    data.display.flush_clients().ok();
+                }
+                
                 let profiler_stats = data.frame_profiler.get_stats(&data.state);
                 let show_profiler = data.state.config.debug.profiler;
                 

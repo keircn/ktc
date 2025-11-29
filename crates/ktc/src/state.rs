@@ -1183,8 +1183,33 @@ impl State {
     
     pub fn close_window(&mut self, id: WindowId) {
         if let Some(window) = self.windows.iter().find(|w| w.id == id) {
-            window.xdg_toplevel.close();
+            if window.wl_surface.client().is_some() {
+                window.xdg_toplevel.close();
+            } else {
+                log::info!("[window] Client for window {} is dead, removing directly", id);
+                self.remove_window(id);
+                self.relayout_windows();
+            }
         }
+    }
+    
+    pub fn cleanup_dead_windows(&mut self) -> bool {
+        let dead_windows: Vec<WindowId> = self.windows.iter()
+            .filter(|w| w.wl_surface.client().is_none())
+            .map(|w| w.id)
+            .collect();
+        
+        let had_dead = !dead_windows.is_empty();
+        for id in dead_windows {
+            log::info!("[window] Cleaning up dead window {}", id);
+            self.remove_window(id);
+        }
+        
+        if had_dead {
+            self.relayout_windows();
+        }
+        
+        had_dead
     }
     
     pub fn kill_window(&mut self, id: WindowId) -> Option<wayland_server::Client> {
