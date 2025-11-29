@@ -1,14 +1,20 @@
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
-    protocol::{wl_registry, wl_compositor, wl_shm, wl_surface, wl_buffer, wl_output, wl_shm_pool},
+    protocol::{wl_registry, wl_compositor, wl_shm, wl_surface, wl_buffer, wl_output, wl_shm_pool, wl_callback},
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
 };
 use std::os::unix::io::AsFd;
+use chrono::Local;
+use ktc_common::Font;
 
-const BAR_HEIGHT: u32 = 32;
+const BAR_HEIGHT: u32 = 24;
+const BG_COLOR: u32 = 0xFF1A1A2E;
+const TEXT_COLOR: u32 = 0xFFE0E0E0;
+const ACTIVE_WS_COLOR: u32 = 0xFF4A9EFF;
+const INACTIVE_WS_COLOR: u32 = 0xFF505050;
 
 struct AppState {
     compositor: Option<wl_compositor::WlCompositor>,
@@ -21,6 +27,10 @@ struct AppState {
     width: u32,
     height: u32,
     running: bool,
+    font: Font,
+    active_workspace: usize,
+    workspace_count: usize,
+    needs_redraw: bool,
 }
 
 impl AppState {
@@ -36,6 +46,10 @@ impl AppState {
             width: 0,
             height: BAR_HEIGHT,
             running: true,
+            font: Font::new(2),
+            active_workspace: 1,
+            workspace_count: 4,
+            needs_redraw: false,
         }
     }
 
@@ -66,6 +80,12 @@ impl AppState {
         self.layer_surface = Some(layer_surface);
     }
 
+    fn request_frame(&self, qh: &QueueHandle<Self>) {
+        if let Some(surface) = &self.surface {
+            surface.frame(qh, ());
+        }
+    }
+
     fn draw(&mut self, qh: &QueueHandle<Self>) {
         if !self.configured || self.width == 0 {
             return;
@@ -74,16 +94,17 @@ impl AppState {
         let Some(shm) = &self.shm else { return };
         let Some(surface) = &self.surface else { return };
 
-        let stride = self.width * 4;
+        let stride = self.width;
         let size = (stride * self.height) as usize;
+        let byte_size = size * 4;
 
-        let file = create_shm_file(size);
-        let pool = shm.create_pool(file.as_fd(), size as i32, qh, ());
+        let file = create_shm_file(byte_size);
+        let pool = shm.create_pool(file.as_fd(), byte_size as i32, qh, ());
         let buffer = pool.create_buffer(
             0,
             self.width as i32,
             self.height as i32,
-            stride as i32,
+            (stride * 4) as i32,
             wl_shm::Format::Argb8888,
             qh,
             (),
@@ -92,17 +113,16 @@ impl AppState {
         unsafe {
             let ptr = libc::mmap(
                 std::ptr::null_mut(),
-                size,
+                byte_size,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 std::os::unix::io::AsRawFd::as_raw_fd(&file),
                 0,
             );
             if ptr != libc::MAP_FAILED {
-                let pixels = std::slice::from_raw_parts_mut(ptr as *mut u32, size / 4);
-                let bg_color = 0xFF1A1A2E;
-                pixels.fill(bg_color);
-                libc::munmap(ptr, size);
+                let pixels = std::slice::from_raw_parts_mut(ptr as *mut u32, size);
+                self.render(pixels, stride as usize);
+                libc::munmap(ptr, byte_size);
             }
         }
 
@@ -111,13 +131,70 @@ impl AppState {
         surface.commit();
 
         pool.destroy();
+        self.needs_redraw = false;
+    }
+
+    fn render(&self, pixels: &mut [u32], stride: usize) {
+        pixels.fill(BG_COLOR);
+
+        let padding = 8;
+        let text_y = (self.height as usize - self.font.char_height()) / 2;
+
+        self.draw_workspaces(pixels, stride, padding, text_y);
+        self.draw_clock(pixels, stride, self.width as usize - padding, text_y);
+    }
+
+    fn draw_workspaces(&self, pixels: &mut [u32], stride: usize, x: usize, y: usize) {
+        let mut current_x = x;
+        let ws_width = self.font.char_width() + 8;
+
+        for i in 1..=self.workspace_count {
+            let color = if i == self.active_workspace {
+                ACTIVE_WS_COLOR
+            } else {
+                INACTIVE_WS_COLOR
+            };
+
+            if i == self.active_workspace {
+                fill_rect(pixels, stride, self.height as usize, current_x - 2, y - 2, ws_width, self.font.char_height() + 4, 0xFF2D3A4A);
+            }
+
+            let num = char::from_digit(i as u32, 10).unwrap_or('?');
+            self.font.draw_char(pixels, stride, current_x + 2, y, num, color);
+            current_x += ws_width + 4;
+        }
+    }
+
+    fn draw_clock(&self, pixels: &mut [u32], stride: usize, right_x: usize, y: usize) {
+        let now = Local::now();
+        let time_str = now.format("%H:%M").to_string();
+        self.font.draw_text_right(pixels, stride, right_x, y, &time_str, TEXT_COLOR);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_rect(pixels: &mut [u32], stride: usize, height: usize, x: usize, y: usize, w: usize, h: usize, color: u32) {
+    for dy in 0..h {
+        for dx in 0..w {
+            let px = x + dx;
+            let py = y + dy;
+            if py < height && px < stride {
+                let idx = py * stride + px;
+                if idx < pixels.len() {
+                    pixels[idx] = color;
+                }
+            }
+        }
     }
 }
 
 fn create_shm_file(size: usize) -> std::fs::File {
     use std::os::unix::io::FromRawFd;
-    
-    let name = format!("/ktcbar-{}", std::process::id());
+
+    let name = format!("/ktcbar-{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0));
     let fd = unsafe {
         libc::shm_open(
             std::ffi::CString::new(name.clone()).unwrap().as_ptr(),
@@ -125,11 +202,11 @@ fn create_shm_file(size: usize) -> std::fs::File {
             0o600,
         )
     };
-    
+
     if fd < 0 {
         panic!("Failed to create shm file");
     }
-    
+
     unsafe {
         libc::shm_unlink(std::ffi::CString::new(name).unwrap().as_ptr());
         libc::ftruncate(fd, size as i64);
@@ -226,12 +303,34 @@ impl Dispatch<wl_surface::WlSurface, ()> for AppState {
 impl Dispatch<wl_buffer::WlBuffer, ()> for AppState {
     fn event(
         _state: &mut Self,
-        _proxy: &wl_buffer::WlBuffer,
-        _event: wl_buffer::Event,
+        buffer: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+        if let wl_buffer::Event::Release = event {
+            buffer.destroy();
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for AppState {
+    fn event(
+        state: &mut Self,
+        _proxy: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            if state.needs_redraw {
+                state.draw(qh);
+            }
+            state.request_frame(qh);
+        }
+    }
 }
 
 impl Dispatch<ZwlrLayerShellV1, ()> for AppState {
@@ -261,6 +360,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
                 state.height = if height > 0 { height } else { BAR_HEIGHT };
                 state.configured = true;
                 state.draw(qh);
+                state.request_frame(qh);
             }
             zwlr_layer_surface_v1::Event::Closed => {
                 state.running = false;
@@ -287,7 +387,26 @@ fn main() {
 
     event_queue.roundtrip(&mut state).expect("Roundtrip failed");
 
+    use std::time::{Duration, Instant};
+    let mut last_update = Instant::now();
+    let update_interval = Duration::from_secs(1);
+
     while state.running {
-        event_queue.blocking_dispatch(&mut state).expect("Dispatch failed");
+        if last_update.elapsed() >= update_interval {
+            state.needs_redraw = true;
+            last_update = Instant::now();
+        }
+
+        if let Err(e) = event_queue.dispatch_pending(&mut state) {
+            eprintln!("Dispatch error: {}", e);
+            break;
+        }
+
+        if let Err(e) = event_queue.flush() {
+            eprintln!("Flush error: {}", e);
+            break;
+        }
+
+        std::thread::sleep(Duration::from_millis(16));
     }
 }
