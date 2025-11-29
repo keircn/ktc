@@ -569,17 +569,16 @@ impl GpuRenderer {
     
     pub fn upload_shm_texture(&mut self, id: u64, width: u32, height: u32, stride: u32, data: &[u8]) -> glow::Texture {
         unsafe {
-            let texture = if let Some(&tex) = self.shm_textures.get(&id) {
-                tex
-            } else {
-                let tex = self.gl.create_texture().unwrap();
-                self.shm_textures.insert(id, tex);
-                tex
-            };
+            if let Some(old_tex) = self.shm_textures.remove(&id) {
+                self.gl.delete_texture(old_tex);
+            }
+            
+            let texture = self.gl.create_texture().unwrap();
+            self.shm_textures.insert(id, texture);
             
             self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
             self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
             self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             
@@ -639,10 +638,6 @@ impl GpuRenderer {
     
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
-    }
-    
-    pub fn get_texture(&self, id: u64) -> Option<&glow::Texture> {
-        self.shm_textures.get(&id)
     }
     
     pub fn drm_fd(&self) -> BorrowedFd<'_> {

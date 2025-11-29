@@ -514,7 +514,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let title_bar_height = state.config.title_bar_height();
         let focused_id = state.focused_window;
         let windows_needing_update: Vec<_> = state.windows.iter()
-            .filter(|w| w.mapped && w.buffer.is_some() && w.needs_redraw)
+            .filter(|w| w.mapped && w.buffer.is_some())
             .map(|w| w.id)
             .collect();
         
@@ -524,7 +524,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         
         let windows_to_render: Vec<_> = state.windows.iter()
             .filter(|w| w.mapped && !w.pixel_cache.is_empty() && w.cache_width > 0 && w.cache_height > 0)
-            .map(|w| (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, w.needs_redraw))
+            .map(|w| (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride))
             .collect();
         
         let gpu = state.gpu_renderer.as_mut().unwrap();
@@ -540,7 +540,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         ];
         gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
         
-        for (id, geom, cache_w, cache_h, cache_stride, needs_texture_update) in &windows_to_render {
+        for (id, geom, cache_w, cache_h, cache_stride) in &windows_to_render {
             let is_focused = focused_id == Some(*id);
             let title_color = if is_focused { title_focused } else { title_unfocused };
             let title_rgba = [
@@ -553,36 +553,19 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             let gpu = state.gpu_renderer.as_mut().unwrap();
             gpu.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
             
-            let texture = if *needs_texture_update {
-                if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
-                    let data: &[u8] = unsafe {
-                        std::slice::from_raw_parts(
-                            win.pixel_cache.as_ptr() as *const u8,
-                            win.pixel_cache.len() * 4,
-                        )
-                    };
-                    let gpu = state.gpu_renderer.as_mut().unwrap();
-                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data)
-                } else {
-                    continue;
-                }
-            } else {
-                let gpu = state.gpu_renderer.as_mut().unwrap();
-                if let Some(&tex) = gpu.get_texture(*id) {
-                    tex
-                } else if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
-                    let data: &[u8] = unsafe {
-                        std::slice::from_raw_parts(
-                            win.pixel_cache.as_ptr() as *const u8,
-                            win.pixel_cache.len() * 4,
-                        )
-                    };
-                    let gpu = state.gpu_renderer.as_mut().unwrap();
-                    gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data)
-                } else {
-                    continue;
-                }
+            let win = match state.windows.iter().find(|w| w.id == *id) {
+                Some(w) => w,
+                None => continue,
             };
+            
+            let data: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    win.pixel_cache.as_ptr() as *const u8,
+                    win.pixel_cache.len() * 4,
+                )
+            };
+            let gpu = state.gpu_renderer.as_mut().unwrap();
+            let texture = gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
             
             let content_y = geom.y + title_bar_height;
             let gpu = state.gpu_renderer.as_mut().unwrap();
@@ -603,7 +586,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
         
-        for (id, _, _, _, _, _) in &windows_to_render {
+        for (id, _, _, _, _) in &windows_to_render {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
                 if let Some(ref buffer) = win.buffer {
