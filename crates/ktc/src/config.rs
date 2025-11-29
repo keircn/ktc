@@ -28,7 +28,7 @@ fn default_vsync() -> bool { true }
 fn default_vrr() -> bool { false }
 fn default_gpu() -> bool { true }
 
-fn default_renderer() -> String { "vulkan".to_string() }
+fn default_renderer() -> String { "opengl".to_string() }
 
 fn default_mod_key() -> String { "alt".to_string() }
 

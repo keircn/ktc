@@ -650,7 +650,6 @@ pub struct State {
     pub next_output_id: OutputId,
     pub canvas: Canvas,
     pub gpu_renderer: Option<crate::renderer::GpuRenderer>,
-    pub vulkan_renderer: Option<crate::vulkan_renderer::VulkanRenderer>,
 
     pub layer_surfaces: Vec<LayerSurface>,
     pub next_layer_surface_id: LayerSurfaceId,
@@ -760,7 +759,6 @@ impl State {
             next_output_id: 1,
             canvas: Canvas::new(default_width, default_height, bg_color),
             gpu_renderer: None,
-            vulkan_renderer: None,
             layer_surfaces: Vec::new(),
             next_layer_surface_id: 1,
             shm_pools: HashMap::new(),
