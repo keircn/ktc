@@ -73,11 +73,15 @@ impl Dispatch<WlSurface, ()> for State {
                     window.mapped = window.buffer.is_some();
                     state.mark_surface_damage(surface_id.clone());
                 } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
-                    let (needs_initial_configure, needs_map, needs_keyboard_focus) = {
+                    let (needs_configure, needs_map, needs_keyboard_focus) = {
                         let ls = state.layer_surfaces.iter_mut()
                             .find(|ls| ls.wl_surface.id() == surface_id);
                         if let Some(ls) = ls {
-                            let needs_initial = !ls.configured;
+                            let size_changed = ls.configured && (
+                                ls.geometry.width != ls.desired_width as i32 ||
+                                ls.geometry.height != ls.desired_height as i32
+                            );
+                            let needs_cfg = !ls.configured || (size_changed && ls.desired_width > 0 && ls.desired_height > 0);
                             
                             if ls.pending_buffer_set {
                                 ls.buffer = ls.pending_buffer.take();
@@ -91,13 +95,13 @@ impl Dispatch<WlSurface, ()> for State {
                             let needs_kb = !was_mapped && ls.mapped && 
                                 ls.keyboard_interactivity == KeyboardInteractivity::Exclusive;
                             
-                            (needs_initial, !was_mapped && ls.mapped, needs_kb)
+                            (needs_cfg, !was_mapped && ls.mapped, needs_kb)
                         } else {
                             (false, false, false)
                         }
                     };
                     
-                    if needs_initial_configure {
+                    if needs_configure {
                         state.configure_layer_surface(surface_id.clone());
                     }
                     

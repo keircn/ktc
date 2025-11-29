@@ -209,41 +209,41 @@ impl State {
         let anchored_top = anchor.contains(Anchor::Top);
         let anchored_bottom = anchor.contains(Anchor::Bottom);
 
-        let width = if anchored_left && anchored_right {
-            screen_width - margin.3 - margin.1
-        } else if desired_width > 0 {
-            desired_width as i32
-        } else {
-            screen_width
-        };
-
-        let height = if anchored_top && anchored_bottom {
-            screen_height - margin.0 - margin.2
-        } else if desired_height > 0 {
-            desired_height as i32
-        } else {
-            screen_height
-        };
-
-        let x = if anchored_left && anchored_right {
+        // i stole this from hyprland's implementation :3
+        let mut width = desired_width as i32;
+        let mut height = desired_height as i32;
+        
+        let x = if width == 0 {
             margin.3
-        } else if anchored_left && !anchored_right {
+        } else if anchored_left && anchored_right {
+            (screen_width - width) / 2
+        } else if anchored_left {
             margin.3
-        } else if anchored_right && !anchored_left {
+        } else if anchored_right {
             screen_width - width - margin.1
         } else {
             (screen_width - width) / 2
         };
-
-        let y = if anchored_top && anchored_bottom {
+        
+        let y = if height == 0 {
             margin.0
-        } else if anchored_top && !anchored_bottom {
+        } else if anchored_top && anchored_bottom {
+            (screen_height - height) / 2
+        } else if anchored_top {
             margin.0
-        } else if anchored_bottom && !anchored_top {
+        } else if anchored_bottom {
             screen_height - height - margin.2
         } else {
             (screen_height - height) / 2
         };
+        
+        if width == 0 {
+            width = screen_width - margin.3 - margin.1;
+        }
+        
+        if height == 0 {
+            height = screen_height - margin.0 - margin.2;
+        }
 
         if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
             ls.geometry = Rectangle { x, y, width, height };

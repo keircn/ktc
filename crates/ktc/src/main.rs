@@ -392,14 +392,23 @@ fn run(config: Config) {
     
     if let Some(ref gpu) = loop_data.state.gpu_renderer {
         let (w, h) = gpu.size();
+        let (phys_w, phys_h) = gpu.physical_size();
         use state::OutputConfig;
         let output_id = loop_data.state.add_output("GPU".to_string(), w as i32, h as i32);
+        
+        let physical_size = if phys_w > 0 && phys_h > 0 {
+            Some((phys_w as i32, phys_h as i32))
+        } else {
+            None
+        };
+        
         loop_data.state.configure_output(output_id, OutputConfig {
             make: Some("GPU".to_string()),
             model: Some("OpenGL".to_string()),
+            physical_size,
             ..Default::default()
         });
-        log::info!("Configured GPU output at {}x{}", w, h);
+        log::info!("Configured GPU output at {}x{} (physical: {}x{}mm)", w, h, phys_w, phys_h);
     } else if let Some(ref drm) = loop_data.drm_info {
         use state::OutputConfig;
         let output_id = loop_data.state.add_output(

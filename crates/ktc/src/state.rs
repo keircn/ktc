@@ -911,6 +911,9 @@ impl State {
             };
             
             for wl_output in &output.wl_outputs {
+                if wl_output.version() >= 2 {
+                    wl_output.scale(output.scale.max(1) as i32);
+                }
                 wl_output.geometry(
                     output.x,
                     output.y,

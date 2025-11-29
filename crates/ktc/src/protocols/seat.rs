@@ -18,6 +18,9 @@ impl GlobalDispatch<WlSeat, ()> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         let seat = data_init.init(resource, ());
+        if seat.version() >= 2 {
+            seat.name("ktc".to_string());
+        }
         seat.capabilities(wl_seat::Capability::Pointer | wl_seat::Capability::Keyboard);
     }
 }

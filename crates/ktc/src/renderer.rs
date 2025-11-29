@@ -100,6 +100,8 @@ pub struct GpuRenderer {
     
     width: u32,
     height: u32,
+    physical_width: u32,
+    physical_height: u32,
     
     shm_textures: HashMap<u64, glow::Texture>,
     dmabuf_textures: HashMap<u64, (glow::Texture, egl::Image)>,
@@ -187,6 +189,9 @@ impl GpuRenderer {
         let (width, height) = mode.size();
         let width = width as u32;
         let height = height as u32;
+        
+        let (physical_width, physical_height) = connector_info.size().unwrap_or((0, 0));
+        log::info!("[gpu] Physical size: {}x{}mm", physical_width, physical_height);
         
         let crtc_handle = res.crtcs().first()
             .copied()
@@ -294,6 +299,8 @@ impl GpuRenderer {
             quad_vbo,
             width,
             height,
+            physical_width,
+            physical_height,
             shm_textures: HashMap::new(),
             dmabuf_textures: HashMap::new(),
             supported_formats,
@@ -726,6 +733,10 @@ impl GpuRenderer {
     
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+    
+    pub fn physical_size(&self) -> (u32, u32) {
+        (self.physical_width, self.physical_height)
     }
     
     pub fn drm_fd(&self) -> BorrowedFd<'_> {
