@@ -794,10 +794,10 @@ impl State {
         let xkb_context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
         let keymap = xkbcommon::xkb::Keymap::new_from_names(
             &xkb_context,
-            "",  // rules - use default
+            "",
             config.keyboard.model.as_str(),
             config.keyboard.layout.as_str(),
-            "",  // variant - use default
+            "",
             if config.keyboard.options.is_empty() {
                 None
             } else {
@@ -1048,14 +1048,11 @@ impl State {
     
     pub fn relayout_windows(&mut self) {
         let active_workspace = self.active_workspace;
-        
-        // Collect tiled windows (non-floating, non-fullscreen, non-maximized)
         let tiled_window_ids: Vec<WindowId> = self.windows.iter()
             .filter(|w| w.workspace == active_workspace && !w.floating && !w.fullscreen && !w.maximized)
             .map(|w| w.id)
             .collect();
         
-        // Collect all workspace windows for configure events
         let all_workspace_window_ids: Vec<WindowId> = self.windows.iter()
             .filter(|w| w.workspace == active_workspace)
             .map(|w| w.id)
@@ -1064,7 +1061,6 @@ impl State {
         let (screen_width, screen_height) = self.screen_size();
         let num_tiled = tiled_window_ids.len();
         
-        // Layout tiled windows
         for (i, window_id) in tiled_window_ids.iter().enumerate() {
             if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
                 let new_geometry = calculate_tiling_geometry(i, num_tiled, screen_width, screen_height);
@@ -1083,7 +1079,6 @@ impl State {
         
         self.damage_tracker.mark_full_damage();
         
-        // Send configure to all workspace windows
         for window_id in &all_workspace_window_ids {
             let (geometry, xdg_surface, xdg_toplevel, is_fullscreen) = {
                 let window = match self.windows.iter().find(|w| w.id == *window_id) {
@@ -1096,7 +1091,6 @@ impl State {
             let states = self.get_toplevel_states(*window_id);
             let serial = self.next_keyboard_serial();
             
-            // Fullscreen windows don't have title bar
             let title_bar_height = if is_fullscreen { 0 } else { self.config.title_bar_height() };
             let client_height = (geometry.height - title_bar_height).max(1);
             xdg_toplevel.configure(geometry.width, client_height, states);
