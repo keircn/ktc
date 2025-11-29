@@ -9,7 +9,7 @@ mod renderer;
 use config::Config;
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
-use wayland_server::{Display, ListeningSocket, Resource};
+use wayland_server::{Display, ListeningSocket};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
     wl_seat::WlSeat,
@@ -598,7 +598,6 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
                 if let Some(ref buffer) = win.buffer {
-                    log::debug!("[render] Releasing buffer {:?} for window {}", buffer.id(), id);
                     buffer.release();
                 }
             }
