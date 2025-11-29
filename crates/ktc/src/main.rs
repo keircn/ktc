@@ -789,7 +789,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             .map(|w| {
                 let buffer_id = w.buffer.as_ref().map(|b| b.id());
                 let is_shm = buffer_id.as_ref().map(|id| state.buffers.contains_key(id)).unwrap_or(false);
-                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id)
+                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id, w.fullscreen)
             })
             .collect();
         
@@ -806,20 +806,27 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         ];
         gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
         
-        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id) in &window_render_info {
+        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id, is_fullscreen) in &window_render_info {
             let is_focused = focused_id == Some(*id);
-            let title_color = if is_focused { title_focused } else { title_unfocused };
-            let title_rgba = [
-                ((title_color >> 16) & 0xFF) as f32 / 255.0,
-                ((title_color >> 8) & 0xFF) as f32 / 255.0,
-                (title_color & 0xFF) as f32 / 255.0,
-                1.0,
-            ];
             
-            let gpu = state.gpu_renderer.as_mut().unwrap();
-            gpu.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
+            let (content_y, effective_title_height) = if *is_fullscreen {
+                (geom.y, 0)
+            } else {
+                let title_color = if is_focused { title_focused } else { title_unfocused };
+                let title_rgba = [
+                    ((title_color >> 16) & 0xFF) as f32 / 255.0,
+                    ((title_color >> 8) & 0xFF) as f32 / 255.0,
+                    (title_color & 0xFF) as f32 / 255.0,
+                    1.0,
+                ];
+                
+                let gpu = state.gpu_renderer.as_mut().unwrap();
+                gpu.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
+                
+                (geom.y + title_bar_height, title_bar_height)
+            };
             
-            let content_y = geom.y + title_bar_height;
+            let _ = effective_title_height;
             
             if *is_shm {
                 let win = match state.windows.iter().find(|w| w.id == *id) {
@@ -1000,10 +1007,10 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             
             let windows_to_render: Vec<_> = state.windows.iter()
                 .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
-                .map(|w| w.id)
+                .map(|w| (w.id, w.fullscreen))
                 .collect();
             
-            for id in &windows_to_render {
+            for (id, _) in &windows_to_render {
                 state.update_window_pixel_cache(*id);
             }
 
@@ -1018,38 +1025,57 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             let border_unfocused = state.config.border_unfocused();
             let title_bar_height = state.config.title_bar_height();
             
-            for id in &windows_to_render {
+            for (id, is_fullscreen) in &windows_to_render {
                 if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
                         let is_focused = focused_id == Some(*id);
-                        let render_width = (win.cache_width as i32).min(win.geometry.width);
-                        let render_height = (win.cache_height as i32).min(win.geometry.height - title_bar_height);
                         
-                        if render_width <= 0 || render_height <= 0 {
-                            continue;
+                        if *is_fullscreen {
+                            let render_width = (win.cache_width as i32).min(win.geometry.width);
+                            let render_height = (win.cache_height as i32).min(win.geometry.height);
+                            
+                            if render_width <= 0 || render_height <= 0 {
+                                continue;
+                            }
+                            
+                            state.canvas.blit_fast(
+                                &win.pixel_cache,
+                                render_width as usize,
+                                render_height as usize,
+                                win.cache_stride,
+                                win.geometry.x,
+                                win.geometry.y
+                            );
+                        } else {
+                            let render_width = (win.cache_width as i32).min(win.geometry.width);
+                            let render_height = (win.cache_height as i32).min(win.geometry.height - title_bar_height);
+                            
+                            if render_width <= 0 || render_height <= 0 {
+                                continue;
+                            }
+                            
+                            state.canvas.draw_decorations(
+                                win.geometry.x, win.geometry.y,
+                                render_width, render_height,
+                                title_bar_height, is_focused,
+                                title_focused, title_unfocused, border_focused, border_unfocused
+                            );
+                            
+                            let content_y = win.geometry.y + title_bar_height;
+                            state.canvas.blit_fast(
+                                &win.pixel_cache,
+                                render_width as usize,
+                                render_height as usize,
+                                win.cache_stride,
+                                win.geometry.x,
+                                content_y
+                            );
                         }
-                        
-                        state.canvas.draw_decorations(
-                            win.geometry.x, win.geometry.y,
-                            render_width, render_height,
-                            title_bar_height, is_focused,
-                            title_focused, title_unfocused, border_focused, border_unfocused
-                        );
-                        
-                        let content_y = win.geometry.y + title_bar_height;
-                        state.canvas.blit_fast(
-                            &win.pixel_cache,
-                            render_width as usize,
-                            render_height as usize,
-                            win.cache_stride,
-                            win.geometry.x,
-                            content_y
-                        );
                     }
                 }
             }
             
-            for id in &windows_to_render {
+            for (id, _) in &windows_to_render {
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                     win.needs_redraw = false;
                     if let Some(ref buffer) = win.buffer {
