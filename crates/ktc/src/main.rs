@@ -429,6 +429,8 @@ fn run(config: Config) {
 
     log::info!("Compositor running. Press Ctrl+Alt+Q to exit.");
     
+    spawn_ktcbar(&loop_data.socket_name);
+    
     while session::is_running() {
         calloop_loop.dispatch(Some(std::time::Duration::from_millis(16)), &mut loop_data)
             .expect("Event loop error");
@@ -1079,6 +1081,76 @@ fn get_workspace_info(state: &State) -> Vec<ktc_common::WorkspaceInfo> {
             }
         })
         .collect()
+}
+
+fn spawn_ktcbar(socket_name: &str) {
+    use std::process::{Command, Stdio};
+    
+    let ktcbar_path = match which_ktcbar() {
+        Some(path) => path,
+        None => {
+            log::debug!("ktcbar not found in PATH, skipping auto-start");
+            return;
+        }
+    };
+    
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| "/tmp".to_string());
+    
+    match Command::new(&ktcbar_path)
+        .env("WAYLAND_DISPLAY", socket_name)
+        .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            session::register_child(child.id());
+            log::info!("Started ktcbar (pid {})", child.id());
+        }
+        Err(e) => {
+            log::warn!("Failed to start ktcbar: {}", e);
+        }
+    }
+}
+
+fn which_ktcbar() -> Option<String> {
+    if std::path::Path::new("ktcbar").exists() {
+        return Some("ktcbar".to_string());
+    }
+    
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = std::path::Path::new(dir).join("ktcbar");
+            if candidate.exists() && candidate.is_file() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    
+    let common_paths = [
+        "/usr/local/bin/ktcbar",
+        "/usr/bin/ktcbar",
+        "~/.local/bin/ktcbar",
+    ];
+    
+    for path in &common_paths {
+        let expanded = if path.starts_with("~") {
+            if let Ok(home) = std::env::var("HOME") {
+                path.replacen("~", &home, 1)
+            } else {
+                continue;
+            }
+        } else {
+            (*path).to_string()
+        };
+        
+        if std::path::Path::new(&expanded).exists() {
+            return Some(expanded);
+        }
+    }
+    
+    None
 }
 
 struct DrmInfo {
