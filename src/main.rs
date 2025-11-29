@@ -599,9 +599,10 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             } else if let Some(buf_id) = buffer_id {
                 if let Some(dmabuf_info) = state.dmabuf_buffers.get(buf_id) {
                     let info = dmabuf_info.clone();
+                    let buffer_cache_id = buf_id.protocol_id() as u64;
                     let gpu = state.gpu_renderer.as_mut().unwrap();
                     if let Some(texture) = gpu.import_dmabuf_texture(
-                        *id,
+                        buffer_cache_id,
                         info.fd,
                         info.width as u32,
                         info.height as u32,
@@ -617,7 +618,11 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                             info.width,
                             info.height,
                         );
+                    } else {
+                        log::warn!("[render] DMA-BUF texture import failed for window {}", id);
                     }
+                } else {
+                    log::warn!("[render] No dmabuf_info for buffer {:?}", buf_id);
                 }
             }
         }

@@ -263,18 +263,12 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                     modifier_hi,
                     modifier_lo,
                 });
-                
-                log::debug!(
-                    "[dmabuf] Added plane {}: offset={}, stride={}, modifier=0x{:08x}{:08x}",
-                    plane_idx, offset, stride, modifier_hi, modifier_lo
-                );
             }
             zwp_linux_buffer_params_v1::Request::Create { width, height, format, .. } => {
                 let mut inner = data.inner.lock().unwrap();
                 inner.width = width;
                 inner.height = height;
                 inner.format = format;
-                log::debug!("[dmabuf] Create (async) {}x{} format=0x{:x} - not implemented, sending failed", width, height, format);
                 resource.failed();
             }
             zwp_linux_buffer_params_v1::Request::CreateImmed { buffer_id, width, height, format, .. } => {
@@ -307,8 +301,6 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                             stride: plane.stride,
                             offset: plane.offset,
                         };
-                        log::debug!("[dmabuf] CreateImmed {}x{} format=0x{:x} modifier=0x{:x} stride={} buffer_id={:?}", 
-                            width, height, format, modifier, plane.stride, buffer.id());
                         state.dmabuf_buffers.insert(buffer.id(), info);
                     }
                 }
@@ -330,7 +322,6 @@ impl Dispatch<WlBuffer, DmaBufBufferData> for State {
         _data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         if let wayland_server::protocol::wl_buffer::Request::Destroy = request {
-            log::debug!("[dmabuf] Buffer destroyed: {}x{}", data.width, data.height);
             if let Some(ref mut renderer) = state.gpu_renderer {
                 renderer.remove_texture(resource.id().protocol_id() as u64);
             }
