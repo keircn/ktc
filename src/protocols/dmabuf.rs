@@ -171,6 +171,7 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
             })
             .unwrap_or(0);
         let card_dev = std::fs::metadata("/dev/dri/card0")
+            .or_else(|_| std::fs::metadata("/dev/dri/card1"))
             .map(|m| {
                 use std::os::unix::fs::MetadataExt;
                 m.rdev()

@@ -382,7 +382,13 @@ impl GpuRenderer {
     }
     
     fn query_dmabuf_formats() -> Vec<DmaBufFormat> {
+        const MOD_INVALID: u64 = 0x00ffffffffffffff;
+        
         vec![
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Argb8888 as u32, modifier: MOD_INVALID },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Xrgb8888 as u32, modifier: MOD_INVALID },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Abgr8888 as u32, modifier: MOD_INVALID },
+            DmaBufFormat { format: drm_fourcc::DrmFourcc::Xbgr8888 as u32, modifier: MOD_INVALID },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Argb8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Xrgb8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
             DmaBufFormat { format: drm_fourcc::DrmFourcc::Abgr8888 as u32, modifier: drm_fourcc::DrmModifier::Linear.into() },
@@ -701,15 +707,28 @@ impl GpuRenderer {
     }
     
     pub fn render_node_dev(&self) -> u64 {
-        if let Ok(meta) = std::fs::metadata("/dev/dri/renderD128") {
+        let card_dev = self.drm_dev();
+        if card_dev == 0 {
+            return 0;
+        }
+        
+        let card_minor = (card_dev & 0xff) as u32;
+        let render_minor = 128 + card_minor;
+        let render_path = format!("/dev/dri/renderD{}", render_minor);
+        
+        if let Ok(meta) = std::fs::metadata(&render_path) {
             use std::os::unix::fs::MetadataExt;
             return meta.rdev();
         }
-        if let Ok(meta) = std::fs::metadata("/dev/dri/renderD129") {
-            use std::os::unix::fs::MetadataExt;
-            return meta.rdev();
+        
+        for path in &["/dev/dri/renderD128", "/dev/dri/renderD129"] {
+            if let Ok(meta) = std::fs::metadata(path) {
+                use std::os::unix::fs::MetadataExt;
+                return meta.rdev();
+            }
         }
-        self.drm_dev()
+        
+        card_dev
     }
     
     pub fn read_pixels(&self, x: i32, y: i32, width: i32, height: i32) -> Vec<u32> {
