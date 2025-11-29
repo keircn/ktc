@@ -339,9 +339,10 @@ impl InputHandler {
             
             if state == KeyState::Pressed {
                 let keysym: u32 = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode)).into();
+                let keysym_lower = keysym_to_lower(keysym);
                 
                 for (action, bind) in &self.keybinds {
-                    if bind.keysym == keysym
+                    if bind.keysym == keysym_lower
                         && bind.ctrl == self.ctrl
                         && bind.alt == self.alt
                         && bind.shift == self.shift
@@ -408,5 +409,14 @@ impl InputHandler {
     
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.libinput.as_fd()
+    }
+}
+
+fn keysym_to_lower(keysym: u32) -> u32 {
+    use xkbcommon::xkb::keysyms::*;
+    if keysym >= KEY_A && keysym <= KEY_Z {
+        keysym + (KEY_a - KEY_A)
+    } else {
+        keysym
     }
 }
