@@ -378,8 +378,20 @@ impl InputHandler {
 fn keysym_to_lower(keysym: u32) -> u32 {
     use xkbcommon::xkb::keysyms::*;
     if keysym >= KEY_A && keysym <= KEY_Z {
-        keysym + (KEY_a - KEY_A)
-    } else {
-        keysym
+        return keysym + (KEY_a - KEY_A);
+    }
+    
+    match keysym {
+        KEY_exclam => KEY_1,
+        KEY_at => KEY_2,
+        KEY_numbersign => KEY_3,
+        KEY_dollar => KEY_4,
+        KEY_percent => KEY_5,
+        KEY_asciicircum => KEY_6,
+        KEY_ampersand => KEY_7,
+        KEY_asterisk => KEY_8,
+        KEY_parenleft => KEY_9,
+        KEY_parenright => KEY_0,
+        _ => keysym,
     }
 }
