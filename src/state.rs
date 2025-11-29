@@ -1344,6 +1344,16 @@ impl State {
         unsafe {
             let src = mmap_ptr.as_ptr().add(buffer_data.offset as usize) as *const u32;
             std::ptr::copy_nonoverlapping(src, window.pixel_cache.as_mut_ptr(), pixel_count);
+            
+            let sample = std::slice::from_raw_parts(src, 4.min(pixel_count));
+            log::debug!(
+                "[cache] win={} buf_id={:?} offset={} size={}x{} samples={:08x},{:08x},{:08x},{:08x}",
+                window_id, buffer_id, buffer_data.offset, buf_width, buf_height,
+                sample.get(0).copied().unwrap_or(0),
+                sample.get(1).copied().unwrap_or(0),
+                sample.get(2).copied().unwrap_or(0),
+                sample.get(3).copied().unwrap_or(0),
+            );
         }
         
         window.cache_width = buf_width;
