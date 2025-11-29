@@ -248,7 +248,7 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
         resource: &ZwpLinuxBufferParamsV1,
         request: zwp_linux_buffer_params_v1::Request,
         data: &DmaBufParamsData,
-        _dhandle: &wayland_server::DisplayHandle,
+        dhandle: &wayland_server::DisplayHandle,
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         match request {
@@ -269,7 +269,48 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 inner.width = width;
                 inner.height = height;
                 inner.format = format;
-                resource.failed();
+                
+                let planes = std::mem::take(&mut inner.planes);
+                
+                if planes.is_empty() {
+                    resource.failed();
+                    return;
+                }
+                
+                let buffer_data = DmaBufBufferData {
+                    width,
+                    height,
+                    format,
+                    planes,
+                };
+                
+                let client = resource.client().unwrap();
+                let buffer: WlBuffer = client
+                    .create_resource::<WlBuffer, DmaBufBufferData, Self>(
+                        dhandle,
+                        1,
+                        buffer_data,
+                    )
+                    .unwrap();
+                
+                if let Some(data) = buffer.data::<DmaBufBufferData>() {
+                    if let Some(plane) = data.planes.first() {
+                        use std::os::fd::AsRawFd;
+                        let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
+                        let info = crate::state::DmaBufBufferInfo {
+                            width: data.width,
+                            height: data.height,
+                            format: data.format,
+                            modifier,
+                            fd: plane.fd.as_raw_fd(),
+                            stride: plane.stride,
+                            offset: plane.offset,
+                        };
+                        state.dmabuf_buffers.insert(buffer.id(), info);
+                    }
+                }
+                
+                resource.created(&buffer);
             }
             zwp_linux_buffer_params_v1::Request::CreateImmed { buffer_id, width, height, format, .. } => {
                 let mut inner = data.inner.lock().unwrap();

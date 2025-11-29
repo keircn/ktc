@@ -387,15 +387,17 @@ impl GpuRenderer {
     fn query_dmabuf_formats(egl: &egl::DynamicInstance<egl::EGL1_5>, display: egl::Display) -> Vec<DmaBufFormat> {
         let mut formats = Vec::new();
         
+        #[allow(improper_ctypes_definitions)]
         type QueryDmaBufFormatsEXT = unsafe extern "C" fn(
-            egl::Display,
+            *const std::ffi::c_void,
             i32,
             *mut i32,
             *mut i32,
         ) -> u32;
         
+        #[allow(improper_ctypes_definitions)]
         type QueryDmaBufModifiersEXT = unsafe extern "C" fn(
-            egl::Display,
+            *const std::ffi::c_void,
             i32,
             i32,
             *mut u64,
@@ -416,15 +418,17 @@ impl GpuRenderer {
             }
         };
         
+        let display_ptr = display.as_ptr();
+        
         let mut num_formats: i32 = 0;
-        let result = unsafe { query_formats(display, 0, std::ptr::null_mut(), &mut num_formats) };
+        let result = unsafe { query_formats(display_ptr, 0, std::ptr::null_mut(), &mut num_formats) };
         if result == 0 || num_formats <= 0 {
             log::warn!("[gpu] eglQueryDmaBufFormatsEXT failed, using fallback formats");
             return Self::fallback_dmabuf_formats();
         }
         
         let mut format_list = vec![0i32; num_formats as usize];
-        let result = unsafe { query_formats(display, num_formats, format_list.as_mut_ptr(), &mut num_formats) };
+        let result = unsafe { query_formats(display_ptr, num_formats, format_list.as_mut_ptr(), &mut num_formats) };
         if result == 0 {
             log::warn!("[gpu] eglQueryDmaBufFormatsEXT (get) failed, using fallback formats");
             return Self::fallback_dmabuf_formats();
@@ -435,7 +439,7 @@ impl GpuRenderer {
         for &format in &format_list {
             let mut num_modifiers: i32 = 0;
             let result = unsafe {
-                query_modifiers(display, format, 0, std::ptr::null_mut(), std::ptr::null_mut(), &mut num_modifiers)
+                query_modifiers(display_ptr, format, 0, std::ptr::null_mut(), std::ptr::null_mut(), &mut num_modifiers)
             };
             
             if result == 0 || num_modifiers <= 0 {
@@ -450,7 +454,7 @@ impl GpuRenderer {
             let mut external_only = vec![0u32; num_modifiers as usize];
             let result = unsafe {
                 query_modifiers(
-                    display,
+                    display_ptr,
                     format,
                     num_modifiers,
                     modifiers.as_mut_ptr(),
