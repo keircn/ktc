@@ -55,6 +55,9 @@ impl Dispatch<WlSurface, ()> for State {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 if let Some(window) = state.get_window_by_surface(resource) {
+                    if let Some(ref buf) = buffer {
+                        log::debug!("[surface] Attach buffer {:?} to window {}", buf.id(), window.id);
+                    }
                     window.pending_buffer = buffer;
                     window.pending_buffer_set = true;
                 }
