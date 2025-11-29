@@ -312,19 +312,11 @@ fn run(config: Config) {
                 if data.vsync_pending {
                     data.vsync_pending = false;
                     if let Some(ref mut gpu) = data.state.gpu_renderer {
-                        if gpu.handle_drm_event() {
-                            let time = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u32;
-                            
-                            for callback in data.state.frame_callbacks.drain(..) {
-                                callback.done(time);
-                            }
-                            data.display.flush_clients().ok();
-                        }
+                        gpu.handle_drm_event();
                     }
                 }
+                
+                data.display.dispatch_clients(&mut data.state).ok();
                 
                 let profiler_stats = data.frame_profiler.get_stats(&data.state);
                 let show_profiler = data.state.config.debug.profiler;
