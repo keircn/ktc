@@ -103,15 +103,19 @@ impl Drop for Session {
 
 fn setup_signal_handlers() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
+        // Ignore TTY/terminal signals
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+        libc::signal(libc::SIGTSTP, libc::SIG_IGN);
+        libc::signal(libc::SIGTTIN, libc::SIG_IGN);
+        libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+        
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_sigaction = signal_handler as usize;
         sa.sa_flags = libc::SA_RESTART;
         
         libc::sigemptyset(&mut sa.sa_mask);
         
-        if libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut()) < 0 {
-            return Err("Failed to set SIGINT handler".into());
-        }
         if libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut()) < 0 {
             return Err("Failed to set SIGTERM handler".into());
         }

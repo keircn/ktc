@@ -473,7 +473,7 @@ fn process_input(data: &mut LoopData) {
             
             unsafe {
                 command.pre_exec(|| {
-                    libc::setpgid(0, 0);
+                    libc::setsid();
                     Ok(())
                 });
             }
@@ -1212,7 +1212,7 @@ fn spawn_ktcbar(socket_name: &str) {
     
     unsafe {
         command.pre_exec(|| {
-            libc::setpgid(0, 0);
+            libc::setsid();
             Ok(())
         });
     }
