@@ -1,15 +1,32 @@
-[package]
-name = "ktc"
+[workspace]
+resolver = "2"
+members = [
+    "crates/ktc",
+    "crates/ktc-common",
+    "crates/ktcbar",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
-[dependencies]
+[workspace.dependencies]
+# Wayland
+wayland-client = "0.31"
 wayland-server = "0.31"
-wayland-protocols = { version = "0.32", features = ["server", "unstable"] }
-wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+wayland-protocols = { version = "0.32", features = ["client", "server", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client", "server"] }
+
+# Event loop
 calloop = "0.14"
+calloop-wayland-source = "0.3"
+
+# System
 libc = "0.2"
 nix = { version = "0.29", features = ["fs", "ioctl", "mman"] }
+
+# DRM/Graphics
 drm = "0.14"
 drm-ffi = "0.9"
 drm-fourcc = "2.2"
@@ -17,10 +34,17 @@ gbm = { version = "0.15", features = ["drm-support"] }
 gbm-sys = "0.3"
 khronos-egl = { version = "6.0", features = ["dynamic"] }
 glow = "0.16"
+
+# Input
 input = { version = "0.9", features = ["libinput_1_21"] }
 xkbcommon = "0.8"
+
+# Utilities
 log = "0.4"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
+
+# Internal crates
+ktc-common = { path = "crates/ktc-common" }

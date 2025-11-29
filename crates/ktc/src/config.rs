@@ -1,3 +1,4 @@
+use ktc_common::{parse_color, ktc_config_dir};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -365,7 +366,7 @@ impl Default for CursorConfig {
 
 impl Config {
     pub fn load() -> Self {
-        let user_config = dirs_user_config().join("ktc/config.toml");
+        let user_config = ktc_config_dir().join("config.toml");
         let system_config = PathBuf::from("/etc/ktc/config.toml");
 
         if user_config.exists() {
@@ -429,33 +430,5 @@ impl Config {
 
     pub fn border_unfocused(&self) -> u32 {
         parse_color(&self.appearance.border_unfocused).unwrap_or(0xFF505050)
-    }
-}
-
-fn dirs_user_config() -> PathBuf {
-    if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg_config);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".config");
-    }
-    PathBuf::from("/tmp")
-}
-
-fn parse_color(s: &str) -> Option<u32> {
-    let s = s.trim().trim_start_matches('#');
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some(0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
-    } else if s.len() == 8 {
-        let a = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let r = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let g = u8::from_str_radix(&s[4..6], 16).ok()?;
-        let b = u8::from_str_radix(&s[6..8], 16).ok()?;
-        Some(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
-    } else {
-        None
     }
 }

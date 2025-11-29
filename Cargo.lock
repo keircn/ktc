@@ -101,6 +101,20 @@ dependencies = [
 
 [[package]]
 name = "calloop"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b99da2f8558ca23c71f4fd15dc57c906239752dd27ff3c00a1d56b685b7cbfec"
+dependencies = [
+ "bitflags",
+ "log",
+ "polling",
+ "rustix 0.38.44",
+ "slab",
+ "thiserror",
+]
+
+[[package]]
+name = "calloop"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb9f6e1368bd4621d2c86baa7e37de77a938adf5221e5dd3d6133340101b309e"
@@ -110,6 +124,18 @@ dependencies = [
  "rustix 1.1.2",
  "slab",
  "tracing",
+]
+
+[[package]]
+name = "calloop-wayland-source"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95a66a987056935f7efce4ab5668920b5d0dac4a7c99991a67395f13702ddd20"
+dependencies = [
+ "calloop 0.13.0",
+ "rustix 0.38.44",
+ "wayland-backend",
+ "wayland-client",
 ]
 
 [[package]]
@@ -478,7 +504,7 @@ dependencies = [
 name = "ktc"
 version = "0.1.0"
 dependencies = [
- "calloop",
+ "calloop 0.14.3",
  "chrono",
  "clap",
  "drm 0.14.1",
@@ -489,6 +515,7 @@ dependencies = [
  "glow",
  "input",
  "khronos-egl",
+ "ktc-common",
  "libc",
  "log",
  "nix",
@@ -498,6 +525,31 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-server",
  "xkbcommon",
+]
+
+[[package]]
+name = "ktc-common"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "ktcbar"
+version = "0.1.0"
+dependencies = [
+ "calloop 0.14.3",
+ "calloop-wayland-source",
+ "chrono",
+ "ktc-common",
+ "libc",
+ "log",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
@@ -782,6 +834,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "toml"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -929,6 +1001,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayland-client"
+version = "0.31.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c66a47e840dc20793f2264eb4b3e4ecb4b75d91c0dd4af04b456128e0bdd449d"
+dependencies = [
+ "bitflags",
+ "rustix 1.1.2",
+ "wayland-backend",
+ "wayland-scanner",
+]
+
+[[package]]
 name = "wayland-protocols"
 version = "0.32.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -936,6 +1020,7 @@ checksum = "efa790ed75fbfd71283bd2521a1cfdc022aabcc28bdcff00851f9e4ae88d9901"
 dependencies = [
  "bitflags",
  "wayland-backend",
+ "wayland-client",
  "wayland-scanner",
  "wayland-server",
 ]
@@ -948,6 +1033,7 @@ checksum = "efd94963ed43cf9938a090ca4f7da58eb55325ec8200c3848963e98dc25b78ec"
 dependencies = [
  "bitflags",
  "wayland-backend",
+ "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
  "wayland-server",

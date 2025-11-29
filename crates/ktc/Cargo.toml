@@ -1,0 +1,34 @@
+[package]
+name = "ktc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "KTC Wayland Compositor"
+
+[[bin]]
+name = "ktc"
+path = "src/main.rs"
+
+[dependencies]
+ktc-common.workspace = true
+
+wayland-server.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+calloop.workspace = true
+libc.workspace = true
+nix.workspace = true
+drm.workspace = true
+drm-ffi.workspace = true
+drm-fourcc.workspace = true
+gbm.workspace = true
+gbm-sys.workspace = true
+khronos-egl.workspace = true
+glow.workspace = true
+input.workspace = true
+xkbcommon.workspace = true
+log.workspace = true
+chrono.workspace = true
+clap.workspace = true
+toml.workspace = true
+serde.workspace = true

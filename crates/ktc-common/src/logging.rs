@@ -1,9 +1,11 @@
 use log::{Level, LevelFilter, Metadata, Record};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use chrono::Local;
+
+use crate::paths::ktc_log_dir;
 
 pub struct FileLogger {
     error_file: Mutex<File>,
@@ -14,7 +16,7 @@ pub struct FileLogger {
 
 impl FileLogger {
     pub fn init() -> Result<(), Box<dyn std::error::Error>> {
-        let log_dir = Self::determine_log_dir()?;
+        let log_dir = ktc_log_dir();
         fs::create_dir_all(&log_dir)?;
         
         let session_num = Self::get_next_session_number(&log_dir);
@@ -53,34 +55,7 @@ impl FileLogger {
         Ok(file)
     }
     
-    fn determine_log_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        if let Some(home) = std::env::var_os("HOME") {
-            let user_log_dir = PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("ktc")
-                .join("logs");
-            return Ok(user_log_dir);
-        }
-        
-        let system_log_dir = PathBuf::from("/var/log/ktc");
-        if Self::can_write_to_dir(&system_log_dir) {
-            return Ok(system_log_dir);
-        }
-        
-        Err("Could not determine log directory".into())
-    }
-    
-    fn can_write_to_dir(path: &PathBuf) -> bool {
-        if path.exists() {
-            return path.metadata()
-                .map(|m| !m.permissions().readonly())
-                .unwrap_or(false);
-        }
-        fs::create_dir_all(path).is_ok()
-    }
-    
-    fn get_next_session_number(log_dir: &PathBuf) -> u32 {
+    fn get_next_session_number(log_dir: &Path) -> u32 {
         let mut max_num = 0u32;
         
         if let Ok(entries) = fs::read_dir(log_dir) {

@@ -1,0 +1,22 @@
+[package]
+name = "ktcbar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Status bar for KTC compositor (wlr-layer-shell client)"
+
+[[bin]]
+name = "ktcbar"
+path = "src/main.rs"
+
+[dependencies]
+ktc-common.workspace = true
+
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+calloop.workspace = true
+calloop-wayland-source.workspace = true
+libc.workspace = true
+log.workspace = true
+chrono.workspace = true
