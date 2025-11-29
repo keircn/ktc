@@ -76,10 +76,17 @@ impl Dispatch<WlShmPool, ()> for State {
         _dhandle: &wayland_server::DisplayHandle,
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
-        if let wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } = request {
-            let buffer = data_init.init(id, ());
-            log::debug!("[buffer] CreateBuffer: {}x{} stride={} offset={}", width, height, stride, offset);
-            state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
+        match request {
+            wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } => {
+                let buffer = data_init.init(id, ());
+                log::debug!("[buffer] CreateBuffer: {}x{} stride={} offset={}", width, height, stride, offset);
+                state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
+            }
+            wl_shm_pool::Request::Resize { size } => {
+                state.resize_shm_pool(resource, size);
+            }
+            wl_shm_pool::Request::Destroy => {}
+            _ => {}
         }
     }
 }

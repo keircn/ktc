@@ -588,6 +588,7 @@ pub struct Window {
     pub mapped: bool,
     pub buffer: Option<WlBuffer>,
     pub pending_buffer: Option<WlBuffer>,
+    pub pending_buffer_set: bool,
     pub needs_redraw: bool,
     pub pixel_cache: Vec<u32>,
     pub cache_width: usize,
@@ -950,6 +951,7 @@ impl State {
             mapped: false,
             buffer: None,
             pending_buffer: None,
+            pending_buffer_set: false,
             needs_redraw: true,
             pixel_cache: Vec::new(),
             cache_width: 0,
@@ -1184,6 +1186,21 @@ impl State {
         self.shm_pools.insert(id, ShmPoolData { fd, size, mmap_ptr: None });
     }
     
+    pub fn resize_shm_pool(&mut self, pool: &WlShmPool, new_size: i32) {
+        let id = pool.id();
+        if let Some(pool_data) = self.shm_pools.get_mut(&id) {
+            if new_size > pool_data.size {
+                if let Some(old_ptr) = pool_data.mmap_ptr.take() {
+                    unsafe {
+                        libc::munmap(old_ptr.as_ptr() as *mut libc::c_void, pool_data.size as usize);
+                    }
+                }
+                pool_data.size = new_size;
+                log::debug!("[shm] Pool {:?} resized to {} bytes", id, new_size);
+            }
+        }
+    }
+    
     #[allow(clippy::too_many_arguments)]
     pub fn add_buffer(&mut self, buffer: &WlBuffer, pool: &WlShmPool, offset: i32, 
                       width: i32, height: i32, stride: i32, format: u32) {
@@ -1304,6 +1321,16 @@ impl State {
         
         let stride_pixels = (buffer_data.stride / 4) as usize;
         let pixel_count = stride_pixels * buf_height;
+        let byte_count = pixel_count * 4;
+        let end_offset = buffer_data.offset as usize + byte_count;
+        
+        if end_offset > pool_data.size as usize {
+            log::warn!(
+                "[cache] Buffer exceeds pool bounds: offset={} + size={} > pool_size={}",
+                buffer_data.offset, byte_count, pool_data.size
+            );
+            return false;
+        }
         
         let window = match self.windows.iter_mut().find(|w| w.id == window_id) {
             Some(w) => w,

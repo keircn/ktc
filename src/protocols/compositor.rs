@@ -55,20 +55,16 @@ impl Dispatch<WlSurface, ()> for State {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 if let Some(window) = state.get_window_by_surface(resource) {
-                    if buffer.is_none() {
-                        window.pending_buffer = None;
-                        window.mapped = false;
-                    } else {
-                        window.pending_buffer = buffer;
-                    }
+                    window.pending_buffer = buffer;
+                    window.pending_buffer_set = true;
                 }
             }
             wl_surface::Request::Commit => {
                 let surface_id = resource.id();
                 if let Some(window) = state.get_window_by_surface(resource) {
-                    if let Some(buffer) = window.pending_buffer.take() {
-                        window.buffer = Some(buffer);
-                        window.needs_redraw = true;
+                    if window.pending_buffer_set {
+                        window.buffer = window.pending_buffer.take();
+                        window.pending_buffer_set = false;
                     }
                     window.mapped = window.buffer.is_some();
                 }
