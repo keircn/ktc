@@ -473,14 +473,12 @@ fn process_input(data: &mut LoopData) {
                     if let Some(client) = data.state.kill_window(focused_id) {
                         client.kill(
                             &data.display.handle(),
-                            wayland_server::backend::DisconnectReason::ProtocolError(
-                                wayland_server::backend::protocol::ProtocolError {
-                                    code: 0,
-                                    object_id: wayland_server::backend::ObjectId::null(),
-                                    object_interface: "".to_string(),
-                                    message: "Killed by user".to_string(),
-                                }
-                            )
+                            wayland_server::backend::protocol::ProtocolError {
+                                code: 0,
+                                object_id: 0,
+                                object_interface: "".to_string(),
+                                message: "Killed by user".to_string(),
+                            }
                         );
                     }
                     data.display.flush_clients().ok();
