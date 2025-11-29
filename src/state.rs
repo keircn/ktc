@@ -608,6 +608,7 @@ pub struct State {
 
     pub shm_pools: HashMap<ObjectId, ShmPoolData>,
     pub buffers: HashMap<ObjectId, BufferData>,
+    pub dmabuf_buffers: HashMap<ObjectId, DmaBufBufferInfo>,
 
     pub frame_callbacks: Vec<WlCallback>,
 
@@ -666,6 +667,17 @@ pub struct BufferData {
     pub format: u32,
 }
 
+#[derive(Clone)]
+pub struct DmaBufBufferInfo {
+    pub width: i32,
+    pub height: i32,
+    pub format: u32,
+    pub modifier: u64,
+    pub fd: std::os::fd::RawFd,
+    pub stride: u32,
+    pub offset: u32,
+}
+
 pub struct KeymapData {
     pub fd: OwnedFd,
     pub size: u32,
@@ -698,6 +710,7 @@ impl State {
             gpu_renderer: None,
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
+            dmabuf_buffers: HashMap::new(),
             frame_callbacks: Vec::new(),
             keyboards: Vec::new(),
             keyboard_to_window: HashMap::new(),

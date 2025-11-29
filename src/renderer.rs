@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::os::fd::{OwnedFd, BorrowedFd, AsFd};
+use std::os::fd::{OwnedFd, BorrowedFd, AsFd, RawFd};
 use std::rc::Rc;
 
 use drm::control::{Device as ControlDevice, crtc, connector, framebuffer};
@@ -11,21 +11,17 @@ pub type GlowContext = glow::Context;
 
 const EGL_PLATFORM_GBM_KHR: egl::Enum = 0x31D7;
 
-// EGL_EXT_image_dma_buf_import (for future DMA-BUF texture import)
-#[allow(dead_code)]
+// EGL_EXT_image_dma_buf_import
 const EGL_LINUX_DMA_BUF_EXT: egl::Enum = 0x3270;
-#[allow(dead_code)]
 const EGL_LINUX_DRM_FOURCC_EXT: egl::Int = 0x3271;
-#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_FD_EXT: egl::Int = 0x3272;
-#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_OFFSET_EXT: egl::Int = 0x3273;
-#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_PITCH_EXT: egl::Int = 0x3274;
-#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: egl::Int = 0x3443;
-#[allow(dead_code)]
 const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: egl::Int = 0x3444;
+const EGL_IMAGE_PRESERVED_KHR: egl::Int = 0x30D2;
+
+const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
 
 const VERTEX_SHADER: &str = r#"#version 100
 attribute vec2 a_position;
@@ -606,6 +602,92 @@ impl GpuRenderer {
             
             texture
         }
+    }
+    
+    pub fn import_dmabuf_texture(
+        &mut self,
+        id: u64,
+        fd: RawFd,
+        width: u32,
+        height: u32,
+        format: u32,
+        stride: u32,
+        offset: u32,
+        modifier: u64,
+    ) -> Option<glow::Texture> {
+        if let Some((tex, _)) = self.dmabuf_textures.get(&id) {
+            return Some(*tex);
+        }
+        
+        let mut attribs: Vec<egl::Attrib> = vec![
+            egl::WIDTH as egl::Attrib, width as egl::Attrib,
+            egl::HEIGHT as egl::Attrib, height as egl::Attrib,
+            EGL_LINUX_DRM_FOURCC_EXT as egl::Attrib, format as egl::Attrib,
+            EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib, fd as egl::Attrib,
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib, offset as egl::Attrib,
+            EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib, stride as egl::Attrib,
+        ];
+        
+        const MOD_INVALID: u64 = 0x00ffffffffffffff;
+        if modifier != MOD_INVALID {
+            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT as egl::Attrib);
+            attribs.push((modifier & 0xFFFFFFFF) as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT as egl::Attrib);
+            attribs.push((modifier >> 32) as egl::Attrib);
+        }
+        
+        attribs.push(EGL_IMAGE_PRESERVED_KHR as egl::Attrib);
+        attribs.push(egl::TRUE as egl::Attrib);
+        attribs.push(egl::NONE as egl::Attrib);
+        
+        let image = unsafe {
+            let no_context = egl::Context::from_ptr(std::ptr::null_mut());
+            let no_buffer = egl::ClientBuffer::from_ptr(std::ptr::null_mut());
+            match self.egl.create_image(
+                self.display,
+                no_context,
+                EGL_LINUX_DMA_BUF_EXT,
+                no_buffer,
+                &attribs,
+            ) {
+                Ok(img) => img,
+                Err(e) => {
+                    log::warn!("[gpu] Failed to create EGL image from DMA-BUF: {:?}", e);
+                    return None;
+                }
+            }
+        };
+        
+        let texture = unsafe {
+            let tex = self.gl.create_texture().ok()?;
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            
+            type GlEglImageTargetTexture2DOesFn = unsafe extern "C" fn(u32, *const std::ffi::c_void);
+            let func: Option<GlEglImageTargetTexture2DOesFn> = self.egl.get_proc_address("glEGLImageTargetTexture2DOES")
+                .map(|p| std::mem::transmute(p));
+            
+            if let Some(gl_image_target) = func {
+                gl_image_target(glow::TEXTURE_2D, image.as_ptr());
+            } else {
+                log::warn!("[gpu] glEGLImageTargetTexture2DOES not available");
+                self.gl.delete_texture(tex);
+                self.egl.destroy_image(self.display, image).ok();
+                return None;
+            }
+            
+            tex
+        };
+        
+        self.dmabuf_textures.insert(id, (texture, image));
+        Some(texture)
+    }
+    
+    pub fn get_dmabuf_texture(&self, id: u64) -> Option<glow::Texture> {
+        self.dmabuf_textures.get(&id).map(|(tex, _)| *tex)
     }
     
     pub fn draw_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32) {

@@ -44,29 +44,19 @@ struct DmaBufParamsInner {
 }
 
 pub struct DmaBufPlane {
-    #[allow(dead_code)]
-    fd: OwnedFd,
-    #[allow(dead_code)]
-    plane_idx: u32,
-    #[allow(dead_code)]
-    offset: u32,
-    #[allow(dead_code)]
-    stride: u32,
-    #[allow(dead_code)]
-    modifier_hi: u32,
-    #[allow(dead_code)]
-    modifier_lo: u32,
+    pub fd: OwnedFd,
+    pub plane_idx: u32,
+    pub offset: u32,
+    pub stride: u32,
+    pub modifier_hi: u32,
+    pub modifier_lo: u32,
 }
 
 pub struct DmaBufBufferData {
-    #[allow(dead_code)]
-    width: i32,
-    #[allow(dead_code)]
-    height: i32,
-    #[allow(dead_code)]
-    format: u32,
-    #[allow(dead_code)]
-    planes: Vec<DmaBufPlane>,
+    pub width: i32,
+    pub height: i32,
+    pub format: u32,
+    pub planes: Vec<DmaBufPlane>,
 }
 
 impl GlobalDispatch<ZwpLinuxDmabufV1, DmaBufGlobal> for State {
@@ -284,19 +274,8 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 inner.width = width;
                 inner.height = height;
                 inner.format = format;
-                
-                if state.gpu_renderer.is_some() && !inner.planes.is_empty() {
-                    let buffer_data = DmaBufBufferData {
-                        width,
-                        height,
-                        format,
-                        planes: std::mem::take(&mut inner.planes),
-                    };
-                    
-                    resource.created(&create_dmabuf_buffer(state, data_init, buffer_data));
-                } else {
-                    resource.failed();
-                }
+                log::debug!("[dmabuf] Create (async) {}x{} format=0x{:x} - not implemented, sending failed", width, height, format);
+                resource.failed();
             }
             zwp_linux_buffer_params_v1::Request::CreateImmed { buffer_id, width, height, format, .. } => {
                 let mut inner = data.inner.lock().unwrap();
@@ -304,28 +283,40 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                 inner.height = height;
                 inner.format = format;
                 
+                let planes = std::mem::take(&mut inner.planes);
+                
                 let buffer_data = DmaBufBufferData {
                     width,
                     height,
                     format,
-                    planes: std::mem::take(&mut inner.planes),
+                    planes,
                 };
                 
-                data_init.init(buffer_id, buffer_data);
+                let buffer: WlBuffer = data_init.init(buffer_id, buffer_data);
+                
+                if let Some(data) = buffer.data::<DmaBufBufferData>() {
+                    if let Some(plane) = data.planes.first() {
+                        use std::os::fd::AsRawFd;
+                        let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
+                        let info = crate::state::DmaBufBufferInfo {
+                            width: data.width,
+                            height: data.height,
+                            format: data.format,
+                            modifier,
+                            fd: plane.fd.as_raw_fd(),
+                            stride: plane.stride,
+                            offset: plane.offset,
+                        };
+                        log::debug!("[dmabuf] CreateImmed {}x{} format=0x{:x} modifier=0x{:x} stride={} buffer_id={:?}", 
+                            width, height, format, modifier, plane.stride, buffer.id());
+                        state.dmabuf_buffers.insert(buffer.id(), info);
+                    }
+                }
             }
             zwp_linux_buffer_params_v1::Request::Destroy => {}
             _ => {}
         }
     }
-}
-
-fn create_dmabuf_buffer(
-    _state: &mut State,
-    _data_init: &mut wayland_server::DataInit<'_, State>,
-    _buffer_data: DmaBufBufferData,
-) -> WlBuffer {
-    // TODO: create a proper wl_buffer
-    todo!("create_dmabuf_buffer for async Create path")
 }
 
 impl Dispatch<WlBuffer, DmaBufBufferData> for State {

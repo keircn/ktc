@@ -9,7 +9,7 @@ mod renderer;
 use config::Config;
 use input::KeyState;
 use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
-use wayland_server::{Display, ListeningSocket};
+use wayland_server::{Display, ListeningSocket, Resource};
 use wayland_server::protocol::{
     wl_compositor::WlCompositor,
     wl_seat::WlSeat,
@@ -536,9 +536,13 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             state.update_window_pixel_cache(*id);
         }
         
-        let window_ids: Vec<_> = state.windows.iter()
-            .filter(|w| w.mapped && !w.pixel_cache.is_empty() && w.cache_width > 0 && w.cache_height > 0)
-            .map(|w| w.id)
+        let window_render_info: Vec<_> = state.windows.iter()
+            .filter(|w| w.mapped && w.buffer.is_some())
+            .map(|w| {
+                let buffer_id = w.buffer.as_ref().map(|b| b.id());
+                let is_shm = buffer_id.as_ref().map(|id| state.buffers.contains_key(id)).unwrap_or(false);
+                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id)
+            })
             .collect();
         
         let gpu = state.gpu_renderer.as_mut().unwrap();
@@ -554,17 +558,7 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         ];
         gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
         
-        for id in &window_ids {
-            let win = match state.windows.iter().find(|w| w.id == *id) {
-                Some(w) => w,
-                None => continue,
-            };
-            
-            let geom = win.geometry;
-            let cache_w = win.cache_width;
-            let cache_h = win.cache_height;
-            let cache_stride = win.cache_stride;
-            
+        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id) in &window_render_info {
             let is_focused = focused_id == Some(*id);
             let title_color = if is_focused { title_focused } else { title_unfocused };
             let title_rgba = [
@@ -577,29 +571,55 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             let gpu = state.gpu_renderer.as_mut().unwrap();
             gpu.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
             
-            let win = match state.windows.iter().find(|w| w.id == *id) {
-                Some(w) => w,
-                None => continue,
-            };
-            
-            let data: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    win.pixel_cache.as_ptr() as *const u8,
-                    win.pixel_cache.len() * 4,
-                )
-            };
-            let gpu = state.gpu_renderer.as_mut().unwrap();
-            let texture = gpu.upload_shm_texture(*id, cache_w as u32, cache_h as u32, cache_stride as u32, data);
-            
             let content_y = geom.y + title_bar_height;
-            let gpu = state.gpu_renderer.as_mut().unwrap();
-            gpu.draw_texture(
-                texture,
-                geom.x,
-                content_y,
-                cache_w as i32,
-                cache_h as i32,
-            );
+            
+            if *is_shm {
+                let win = match state.windows.iter().find(|w| w.id == *id) {
+                    Some(w) if !w.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => w,
+                    _ => continue,
+                };
+                
+                let data: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        win.pixel_cache.as_ptr() as *const u8,
+                        win.pixel_cache.len() * 4,
+                    )
+                };
+                let gpu = state.gpu_renderer.as_mut().unwrap();
+                let texture = gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
+                
+                let gpu = state.gpu_renderer.as_mut().unwrap();
+                gpu.draw_texture(
+                    texture,
+                    geom.x,
+                    content_y,
+                    *cache_w as i32,
+                    *cache_h as i32,
+                );
+            } else if let Some(buf_id) = buffer_id {
+                if let Some(dmabuf_info) = state.dmabuf_buffers.get(buf_id) {
+                    let info = dmabuf_info.clone();
+                    let gpu = state.gpu_renderer.as_mut().unwrap();
+                    if let Some(texture) = gpu.import_dmabuf_texture(
+                        *id,
+                        info.fd,
+                        info.width as u32,
+                        info.height as u32,
+                        info.format,
+                        info.stride,
+                        info.offset,
+                        info.modifier,
+                    ) {
+                        gpu.draw_texture(
+                            texture,
+                            geom.x,
+                            content_y,
+                            info.width,
+                            info.height,
+                        );
+                    }
+                }
+            }
         }
         
         if let Some(stats) = profiler_stats {
