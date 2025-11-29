@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsFd;
 use std::os::unix::net::UnixStream;
 use chrono::Local;
-use ktc_common::{Font, IpcCommand, IpcEvent, WorkspaceInfo, ipc_socket_path};
+use ktc_common::{AppLogger, Font, IpcCommand, IpcEvent, WorkspaceInfo, ipc_socket_path};
 
 const BAR_HEIGHT: u32 = 24;
 const BG_COLOR: u32 = 0xFF1A1A2E;
@@ -482,6 +482,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
 }
 
 fn main() {
+    let _ = AppLogger::init("ktcbar");
+    
     let conn = Connection::connect_to_env().expect("Failed to connect to Wayland");
     let display = conn.display();
 
