@@ -264,7 +264,8 @@ impl State {
         let surface_id = surface.id();
         if let Some(pos) = self.layer_surfaces.iter().position(|ls| ls.wl_surface.id() == surface_id) {
             let ls = &self.layer_surfaces[pos];
-            log::debug!("[layer_shell] Removing layer surface {}", ls.id);
+            log::debug!("[layer_shell] Removing layer surface {} (namespace: {})", ls.id, ls.namespace);
+            ls.layer_surface.closed();
             self.damage_tracker.add_damage(ls.geometry);
             self.layer_surfaces.swap_remove(pos);
             self.damage_tracker.mark_full_damage();

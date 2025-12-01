@@ -876,35 +876,54 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                     *cache_h as i32,
                 );
             } else if let Some(buf_id) = buffer_id {
+                log::debug!("[render] Window {} has non-SHM buffer {:?}, checking dmabuf_buffers (count={})", 
+                    id, buf_id, state.dmabuf_buffers.len());
                 if let Some(dmabuf_info) = state.dmabuf_buffers.get(buf_id) {
-                    use std::os::fd::AsRawFd;
                     let buffer_cache_id = buf_id.protocol_id() as u64;
-                    let raw_fd = dmabuf_info.fd.as_raw_fd();
                     let width = dmabuf_info.width;
                     let height = dmabuf_info.height;
                     let format = dmabuf_info.format;
-                    let modifier = dmabuf_info.modifier;
-                    let stride = dmabuf_info.stride;
-                    let offset = dmabuf_info.offset;
-                    log::debug!("[render] DMA-BUF window {}: {}x{} format={:#x} modifier={:#x} fd={}", 
-                        id, width, height, format, modifier, raw_fd);
+                    let planes = &dmabuf_info.planes;
+                    log::debug!("[render] DMA-BUF window {}: {}x{} format={:#x} planes={}", 
+                        id, width, height, format, planes.len());
                     let gpu = state.gpu_renderer.as_mut().unwrap();
-                    if let Some(texture) = gpu.import_dmabuf_texture(
-                        buffer_cache_id,
-                        raw_fd,
-                        width as u32,
-                        height as u32,
-                        format,
-                        stride,
-                        offset,
-                        modifier,
-                    ) {
+                    let texture_result = if planes.is_empty() {
+                        use std::os::fd::AsRawFd;
+                        let raw_fd = dmabuf_info.fd.as_raw_fd();
+                        let modifier = dmabuf_info.modifier;
+                        let stride = dmabuf_info.stride;
+                        let offset = dmabuf_info.offset;
+                        gpu.import_dmabuf_texture(
+                            buffer_cache_id,
+                            raw_fd,
+                            width as u32,
+                            height as u32,
+                            format,
+                            stride,
+                            offset,
+                            modifier,
+                        )
+                    } else {
+                        gpu.import_dmabuf_texture_multiplane(
+                            buffer_cache_id,
+                            width as u32,
+                            height as u32,
+                            format,
+                            planes,
+                        )
+                    };
+                    
+                    if let Some(texture) = texture_result {
+                        let is_external = gpu.is_dmabuf_external(buffer_cache_id);
+                        let draw_width = geom.width;
+                        let draw_height = geom.height - if *is_fullscreen { 0 } else { title_bar_height };
                         gpu.draw_dmabuf_texture(
                             texture,
                             geom.x,
                             content_y,
-                            width,
-                            height,
+                            draw_width,
+                            draw_height,
+                            is_external,
                         );
                     } else {
                         log::warn!("[render] DMA-BUF texture import failed for window {}", id);

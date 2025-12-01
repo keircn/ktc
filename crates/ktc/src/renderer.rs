@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::os::fd::{OwnedFd, BorrowedFd, AsFd, RawFd};
+use std::os::fd::{OwnedFd, BorrowedFd, AsFd, AsRawFd, RawFd};
 use std::rc::Rc;
 
 use drm::control::{Device as ControlDevice, crtc, connector, framebuffer};
@@ -12,11 +12,30 @@ pub type GlowContext = glow::Context;
 const EGL_PLATFORM_GBM_KHR: egl::Enum = 0x31D7;
 const EGL_LINUX_DMA_BUF_EXT: egl::Enum = 0x3270;
 const EGL_LINUX_DRM_FOURCC_EXT: egl::Int = 0x3271;
+
 const EGL_DMA_BUF_PLANE0_FD_EXT: egl::Int = 0x3272;
 const EGL_DMA_BUF_PLANE0_OFFSET_EXT: egl::Int = 0x3273;
 const EGL_DMA_BUF_PLANE0_PITCH_EXT: egl::Int = 0x3274;
 const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: egl::Int = 0x3443;
 const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: egl::Int = 0x3444;
+
+const EGL_DMA_BUF_PLANE1_FD_EXT: egl::Int = 0x3275;
+const EGL_DMA_BUF_PLANE1_OFFSET_EXT: egl::Int = 0x3276;
+const EGL_DMA_BUF_PLANE1_PITCH_EXT: egl::Int = 0x3277;
+const EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT: egl::Int = 0x3445;
+const EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT: egl::Int = 0x3446;
+
+const EGL_DMA_BUF_PLANE2_FD_EXT: egl::Int = 0x3278;
+const EGL_DMA_BUF_PLANE2_OFFSET_EXT: egl::Int = 0x3279;
+const EGL_DMA_BUF_PLANE2_PITCH_EXT: egl::Int = 0x327A;
+const EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT: egl::Int = 0x3447;
+const EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT: egl::Int = 0x3448;
+
+const EGL_DMA_BUF_PLANE3_FD_EXT: egl::Int = 0x3440;
+const EGL_DMA_BUF_PLANE3_OFFSET_EXT: egl::Int = 0x3441;
+const EGL_DMA_BUF_PLANE3_PITCH_EXT: egl::Int = 0x3442;
+const EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT: egl::Int = 0x3449;
+const EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT: egl::Int = 0x344A;
 
 #[allow(dead_code)]
 const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
@@ -54,6 +73,17 @@ const FRAGMENT_SHADER_EXTERNAL: &str = r#"#version 100
 precision mediump float;
 varying vec2 v_texcoord;
 uniform samplerExternalOES u_texture;
+
+void main() {
+    vec4 color = texture2D(u_texture, v_texcoord);
+    gl_FragColor = vec4(color.rgb, 1.0);
+}
+"#;
+
+const FRAGMENT_SHADER_DMABUF: &str = r#"#version 100
+precision mediump float;
+varying vec2 v_texcoord;
+uniform sampler2D u_texture;
 
 void main() {
     vec4 color = texture2D(u_texture, v_texcoord);
@@ -105,6 +135,7 @@ pub struct GpuRenderer {
     
     texture_program: glow::Program,
     external_program: Option<glow::Program>,
+    dmabuf_program: glow::Program,
     color_program: glow::Program,
     quad_vao: glow::VertexArray,
     #[allow(dead_code)]
@@ -116,7 +147,7 @@ pub struct GpuRenderer {
     physical_height: u32,
     
     shm_textures: HashMap<u64, glow::Texture>,
-    dmabuf_textures: HashMap<u64, (glow::Texture, egl::Image)>,
+    dmabuf_textures: HashMap<u64, (glow::Texture, egl::Image, bool)>,
     
     pub supported_formats: Vec<DmaBufFormat>,
 }
@@ -286,6 +317,7 @@ impl GpuRenderer {
         } else {
             log::warn!("[gpu] GL_OES_EGL_image_external not supported, DMA-BUF may not work");
         }
+        let dmabuf_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_DMABUF)?;
         let color_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_COLOR)?;
         let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
         let supported_formats = Self::query_dmabuf_formats(&egl, display);
@@ -313,6 +345,7 @@ impl GpuRenderer {
             flip_pending: false,
             texture_program,
             external_program,
+            dmabuf_program,
             color_program,
             quad_vao,
             quad_vbo,
@@ -744,26 +777,27 @@ impl GpuRenderer {
         offset: u32,
         modifier: u64,
     ) -> Option<glow::Texture> {
-        if let Some((tex, img)) = self.dmabuf_textures.remove(&id) {
-            unsafe {
-                self.gl.delete_texture(tex);
-                self.egl.destroy_image(self.display, img).ok();
-            }
+        if let Some((tex, _, _)) = self.dmabuf_textures.get(&id) {
+            return Some(*tex);
         }
         
-        log::debug!("[gpu] Importing DMA-BUF: id={} fd={} {}x{} format={:#x} stride={} offset={} modifier={:#x}",
-            id, fd, width, height, format, stride, offset, modifier);
+        log::info!("[gpu] Creating new DMA-BUF texture (single plane): id={} fd={} {}x{} format={:#x} modifier={:#x}",
+            id, fd, width, height, format, modifier);
         
         let mut attribs: Vec<egl::Attrib> = vec![
             egl::WIDTH as egl::Attrib, width as egl::Attrib,
             egl::HEIGHT as egl::Attrib, height as egl::Attrib,
             EGL_LINUX_DRM_FOURCC_EXT as egl::Attrib, format as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib, fd as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib, offset as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib, stride as egl::Attrib,
         ];
         
         const MOD_INVALID: u64 = 0x00ffffffffffffff;
+        
+        attribs.push(EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib);
+        attribs.push(fd as egl::Attrib);
+        attribs.push(EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib);
+        attribs.push(offset as egl::Attrib);
+        attribs.push(EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib);
+        attribs.push(stride as egl::Attrib);
         if modifier != MOD_INVALID {
             attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT as egl::Attrib);
             attribs.push((modifier & 0xFFFFFFFF) as egl::Attrib);
@@ -773,6 +807,113 @@ impl GpuRenderer {
         
         attribs.push(egl::NONE as egl::Attrib);
         
+        self.import_dmabuf_texture_from_attribs(id, &attribs)
+    }
+    
+    pub fn import_dmabuf_texture_multiplane(
+        &mut self,
+        id: u64,
+        width: u32,
+        height: u32,
+        format: u32,
+        planes: &[crate::state::DmaBufPlaneInfo],
+    ) -> Option<glow::Texture> {
+        if planes.is_empty() {
+            log::warn!("[gpu] No planes provided for DMA-BUF import");
+            return None;
+        }
+        
+        if let Some((tex, _, _)) = self.dmabuf_textures.get(&id) {
+            return Some(*tex);
+        }
+        
+        let plane0 = &planes[0];
+        let fd0 = plane0.fd.as_raw_fd();
+        log::info!("[gpu] Creating new DMA-BUF texture: id={} fd={} {}x{} format={:#x} planes={} modifier={:#x}",
+            id, fd0, width, height, format, planes.len(), plane0.modifier);
+        
+        let mut attribs: Vec<egl::Attrib> = vec![
+            egl::WIDTH as egl::Attrib, width as egl::Attrib,
+            egl::HEIGHT as egl::Attrib, height as egl::Attrib,
+            EGL_LINUX_DRM_FOURCC_EXT as egl::Attrib, format as egl::Attrib,
+        ];
+        
+        const MOD_INVALID: u64 = 0x00ffffffffffffff;
+        
+        attribs.push(EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib);
+        attribs.push(fd0 as egl::Attrib);
+        attribs.push(EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib);
+        attribs.push(plane0.offset as egl::Attrib);
+        attribs.push(EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib);
+        attribs.push(plane0.stride as egl::Attrib);
+        if plane0.modifier != MOD_INVALID {
+            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT as egl::Attrib);
+            attribs.push((plane0.modifier & 0xFFFFFFFF) as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT as egl::Attrib);
+            attribs.push((plane0.modifier >> 32) as egl::Attrib);
+        }
+        
+        if planes.len() > 1 {
+            let plane1 = &planes[1];
+            let fd1 = plane1.fd.as_raw_fd();
+            attribs.push(EGL_DMA_BUF_PLANE1_FD_EXT as egl::Attrib);
+            attribs.push(fd1 as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE1_OFFSET_EXT as egl::Attrib);
+            attribs.push(plane1.offset as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE1_PITCH_EXT as egl::Attrib);
+            attribs.push(plane1.stride as egl::Attrib);
+            if plane1.modifier != MOD_INVALID {
+                attribs.push(EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT as egl::Attrib);
+                attribs.push((plane1.modifier & 0xFFFFFFFF) as egl::Attrib);
+                attribs.push(EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT as egl::Attrib);
+                attribs.push((plane1.modifier >> 32) as egl::Attrib);
+            }
+        }
+        
+        if planes.len() > 2 {
+            let plane2 = &planes[2];
+            let fd2 = plane2.fd.as_raw_fd();
+            attribs.push(EGL_DMA_BUF_PLANE2_FD_EXT as egl::Attrib);
+            attribs.push(fd2 as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE2_OFFSET_EXT as egl::Attrib);
+            attribs.push(plane2.offset as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE2_PITCH_EXT as egl::Attrib);
+            attribs.push(plane2.stride as egl::Attrib);
+            if plane2.modifier != MOD_INVALID {
+                attribs.push(EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT as egl::Attrib);
+                attribs.push((plane2.modifier & 0xFFFFFFFF) as egl::Attrib);
+                attribs.push(EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT as egl::Attrib);
+                attribs.push((plane2.modifier >> 32) as egl::Attrib);
+            }
+        }
+        
+        if planes.len() > 3 {
+            let plane3 = &planes[3];
+            let fd3 = plane3.fd.as_raw_fd();
+            attribs.push(EGL_DMA_BUF_PLANE3_FD_EXT as egl::Attrib);
+            attribs.push(fd3 as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE3_OFFSET_EXT as egl::Attrib);
+            attribs.push(plane3.offset as egl::Attrib);
+            attribs.push(EGL_DMA_BUF_PLANE3_PITCH_EXT as egl::Attrib);
+            attribs.push(plane3.stride as egl::Attrib);
+            if plane3.modifier != MOD_INVALID {
+                attribs.push(EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT as egl::Attrib);
+                attribs.push((plane3.modifier & 0xFFFFFFFF) as egl::Attrib);
+                attribs.push(EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT as egl::Attrib);
+                attribs.push((plane3.modifier >> 32) as egl::Attrib);
+            }
+        }
+        
+        attribs.push(egl::NONE as egl::Attrib);
+        
+        self.import_dmabuf_texture_from_attribs(id, &attribs)
+    }
+    
+    fn import_dmabuf_texture_from_attribs(
+        &mut self,
+        id: u64,
+        attribs: &[egl::Attrib],
+    ) -> Option<glow::Texture> {
         let image = unsafe {
             let no_context = egl::Context::from_ptr(std::ptr::null_mut());
             let no_buffer = egl::ClientBuffer::from_ptr(std::ptr::null_mut());
@@ -781,7 +922,7 @@ impl GpuRenderer {
                 no_context,
                 EGL_LINUX_DMA_BUF_EXT,
                 no_buffer,
-                &attribs,
+                attribs,
             ) {
                 Ok(img) => img,
                 Err(e) => {
@@ -791,42 +932,74 @@ impl GpuRenderer {
             }
         };
         
-        let texture = unsafe {
+        type GlEglImageTargetTexture2DOesFn = unsafe extern "C" fn(u32, *const std::ffi::c_void);
+        let gl_image_target: Option<GlEglImageTargetTexture2DOesFn> = self.egl.get_proc_address("glEGLImageTargetTexture2DOES")
+            .map(|p| unsafe { std::mem::transmute(p) });
+        
+        let gl_image_target = match gl_image_target {
+            Some(f) => f,
+            None => {
+                log::warn!("[gpu] glEGLImageTargetTexture2DOES not available");
+                self.egl.destroy_image(self.display, image).ok();
+                return None;
+            }
+        };
+        
+        // try GL_TEXTURE_2D first - this is a hacky workaround for firefox
+        let (texture, is_external) = unsafe {
             let tex = self.gl.create_texture().ok()?;
-            self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(tex));
-            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             
-            type GlEglImageTargetTexture2DOesFn = unsafe extern "C" fn(u32, *const std::ffi::c_void);
-            let func: Option<GlEglImageTargetTexture2DOesFn> = self.egl.get_proc_address("glEGLImageTargetTexture2DOES")
-                .map(|p| std::mem::transmute(p));
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
             
-            if let Some(gl_image_target) = func {
+            while self.gl.get_error() != glow::NO_ERROR {}
+            
+            gl_image_target(glow::TEXTURE_2D, image.as_ptr());
+            
+            let gl_error = self.gl.get_error();
+            if gl_error == glow::NO_ERROR {
+                log::debug!("[gpu] DMA-BUF imported as GL_TEXTURE_2D (id={})", id);
+                (tex, false)
+            } else {
+                log::debug!("[gpu] GL_TEXTURE_2D failed ({:#x}), trying GL_TEXTURE_EXTERNAL_OES", gl_error);
+                
+                self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(tex));
+                self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+                self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+                self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+                self.gl.tex_parameter_i32(GL_TEXTURE_EXTERNAL_OES, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+                
+                while self.gl.get_error() != glow::NO_ERROR {}
+                
                 gl_image_target(GL_TEXTURE_EXTERNAL_OES, image.as_ptr());
                 
                 let gl_error = self.gl.get_error();
                 if gl_error != glow::NO_ERROR {
-                    log::warn!("[gpu] GL error after EGL image target: {:#x}", gl_error);
+                    log::warn!("[gpu] GL_TEXTURE_EXTERNAL_OES also failed: {:#x}", gl_error);
+                    self.gl.delete_texture(tex);
+                    self.egl.destroy_image(self.display, image).ok();
+                    return None;
                 }
-            } else {
-                log::warn!("[gpu] glEGLImageTargetTexture2DOES not available");
-                self.gl.delete_texture(tex);
-                self.egl.destroy_image(self.display, image).ok();
-                return None;
+                
+                log::debug!("[gpu] DMA-BUF imported as GL_TEXTURE_EXTERNAL_OES (id={})", id);
+                (tex, true)
             }
-            
-            tex
         };
         
-        log::debug!("[gpu] Successfully imported DMA-BUF texture id={}", id);
-        self.dmabuf_textures.insert(id, (texture, image));
+        log::debug!("[gpu] Successfully imported DMA-BUF texture id={} (external={})", id, is_external);
+        self.dmabuf_textures.insert(id, (texture, image, is_external));
         Some(texture)
     }
     
     pub fn get_dmabuf_texture(&self, id: u64) -> Option<glow::Texture> {
-        self.dmabuf_textures.get(&id).map(|(tex, _)| *tex)
+        self.dmabuf_textures.get(&id).map(|(tex, _, _)| *tex)
+    }
+    
+    pub fn is_dmabuf_external(&self, id: u64) -> bool {
+        self.dmabuf_textures.get(&id).map(|(_, _, is_external)| *is_external).unwrap_or(true)
     }
     
     pub fn draw_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32) {
@@ -856,43 +1029,75 @@ impl GpuRenderer {
         }
     }
     
-    pub fn draw_dmabuf_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32) {
-        let program = match self.external_program {
-            Some(p) => p,
-            None => {
-                log::warn!("[gpu] Cannot draw DMA-BUF texture: external program not available");
-                return;
+    pub fn draw_dmabuf_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32, is_external: bool) {
+        if is_external {
+            let program = match self.external_program {
+                Some(p) => p,
+                None => {
+                    log::warn!("[gpu] Cannot draw external DMA-BUF texture: external program not available");
+                    return;
+                }
+            };
+            
+            unsafe {
+                self.gl.enable(glow::BLEND);
+                self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                
+                self.gl.use_program(Some(program));
+                
+                let offset_loc = self.gl.get_uniform_location(program, "u_offset");
+                let size_loc = self.gl.get_uniform_location(program, "u_size");
+                let screen_loc = self.gl.get_uniform_location(program, "u_screen_size");
+                let tex_loc = self.gl.get_uniform_location(program, "u_texture");
+                
+                self.gl.uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
+                self.gl.uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
+                self.gl.uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
+                self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
+                
+                self.gl.active_texture(glow::TEXTURE0);
+                self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(texture));
+                
+                self.gl.bind_vertex_array(Some(self.quad_vao));
+                self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+                
+                let gl_error = self.gl.get_error();
+                if gl_error != glow::NO_ERROR {
+                    log::warn!("[gpu] GL error after drawing external DMA-BUF texture: {:#x}", gl_error);
+                }
+                
+                self.gl.disable(glow::BLEND);
             }
-        };
-        
-        unsafe {
-            self.gl.enable(glow::BLEND);
-            self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-            
-            self.gl.use_program(Some(program));
-            
-            let offset_loc = self.gl.get_uniform_location(program, "u_offset");
-            let size_loc = self.gl.get_uniform_location(program, "u_size");
-            let screen_loc = self.gl.get_uniform_location(program, "u_screen_size");
-            let tex_loc = self.gl.get_uniform_location(program, "u_texture");
-            
-            self.gl.uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
-            self.gl.uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
-            self.gl.uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
-            self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
-            
-            self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(texture));
-            
-            self.gl.bind_vertex_array(Some(self.quad_vao));
-            self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
-            
-            let gl_error = self.gl.get_error();
-            if gl_error != glow::NO_ERROR {
-                log::warn!("[gpu] GL error after drawing DMA-BUF texture: {:#x}", gl_error);
+        } else {
+            unsafe {
+                self.gl.enable(glow::BLEND);
+                self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                
+                self.gl.use_program(Some(self.dmabuf_program));
+                
+                let offset_loc = self.gl.get_uniform_location(self.dmabuf_program, "u_offset");
+                let size_loc = self.gl.get_uniform_location(self.dmabuf_program, "u_size");
+                let screen_loc = self.gl.get_uniform_location(self.dmabuf_program, "u_screen_size");
+                let tex_loc = self.gl.get_uniform_location(self.dmabuf_program, "u_texture");
+                
+                self.gl.uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
+                self.gl.uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
+                self.gl.uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
+                self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
+                
+                self.gl.active_texture(glow::TEXTURE0);
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                
+                self.gl.bind_vertex_array(Some(self.quad_vao));
+                self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+                
+                let gl_error = self.gl.get_error();
+                if gl_error != glow::NO_ERROR {
+                    log::warn!("[gpu] GL error after drawing DMA-BUF texture: {:#x}", gl_error);
+                }
+                
+                self.gl.disable(glow::BLEND);
             }
-            
-            self.gl.disable(glow::BLEND);
         }
     }
     
@@ -900,7 +1105,7 @@ impl GpuRenderer {
         if let Some(tex) = self.shm_textures.remove(&id) {
             unsafe { self.gl.delete_texture(tex); }
         }
-        if let Some((tex, img)) = self.dmabuf_textures.remove(&id) {
+        if let Some((tex, img, _)) = self.dmabuf_textures.remove(&id) {
             unsafe {
                 self.gl.delete_texture(tex);
                 self.egl.destroy_image(self.display, img).ok();
@@ -1034,7 +1239,7 @@ impl Drop for GpuRenderer {
         for (_, tex) in self.shm_textures.drain() {
             unsafe { self.gl.delete_texture(tex); }
         }
-        for (_, (tex, img)) in self.dmabuf_textures.drain() {
+        for (_, (tex, img, _)) in self.dmabuf_textures.drain() {
             unsafe {
                 self.gl.delete_texture(tex);
                 self.egl.destroy_image(self.display, img).ok();
@@ -1046,6 +1251,7 @@ impl Drop for GpuRenderer {
             if let Some(external) = self.external_program {
                 self.gl.delete_program(external);
             }
+            self.gl.delete_program(self.dmabuf_program);
             self.gl.delete_program(self.color_program);
             self.gl.delete_vertex_array(self.quad_vao);
             self.gl.delete_buffer(self.quad_vbo);

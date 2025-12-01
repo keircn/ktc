@@ -190,7 +190,7 @@ impl State {
             return false;
         }
 
-        let pool_id = buffer_data.pool_id;
+        let pool_id = buffer_data.pool_id.clone();
         let pool_data = match self.shm_pools.get_mut(&pool_id) {
             Some(data) => data,
             None => return false,

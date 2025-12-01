@@ -297,6 +297,19 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                     if let Some(plane) = data.planes.first() {
                         let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
                         let dup_fd = plane.fd.try_clone().expect("Failed to dup dmabuf fd");
+                        
+                        let planes: Vec<crate::state::DmaBufPlaneInfo> = data.planes.iter().map(|p| {
+                            crate::state::DmaBufPlaneInfo {
+                                fd: p.fd.try_clone().expect("Failed to dup plane fd"),
+                                offset: p.offset,
+                                stride: p.stride,
+                                modifier: ((p.modifier_hi as u64) << 32) | (p.modifier_lo as u64),
+                            }
+                        }).collect();
+                        
+                        log::debug!("[dmabuf] Created buffer: {}x{} format={:#x} modifier={:#x} planes={}",
+                            data.width, data.height, data.format, modifier, planes.len());
+                        
                         let info = crate::state::DmaBufBufferInfo {
                             width: data.width,
                             height: data.height,
@@ -305,6 +318,7 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                             fd: dup_fd,
                             stride: plane.stride,
                             offset: plane.offset,
+                            planes,
                         };
                         state.dmabuf_buffers.insert(buffer.id(), info);
                     }
@@ -333,6 +347,19 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                     if let Some(plane) = data.planes.first() {
                         let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
                         let dup_fd = plane.fd.try_clone().expect("Failed to dup dmabuf fd");
+                        
+                        let planes: Vec<crate::state::DmaBufPlaneInfo> = data.planes.iter().map(|p| {
+                            crate::state::DmaBufPlaneInfo {
+                                fd: p.fd.try_clone().expect("Failed to dup plane fd"),
+                                offset: p.offset,
+                                stride: p.stride,
+                                modifier: ((p.modifier_hi as u64) << 32) | (p.modifier_lo as u64),
+                            }
+                        }).collect();
+                        
+                        log::debug!("[dmabuf] CreateImmed buffer: {}x{} format={:#x} modifier={:#x} planes={} buffer_id={:?}",
+                            data.width, data.height, data.format, modifier, planes.len(), buffer.id());
+                        
                         let info = crate::state::DmaBufBufferInfo {
                             width: data.width,
                             height: data.height,
@@ -341,8 +368,10 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                             fd: dup_fd,
                             stride: plane.stride,
                             offset: plane.offset,
+                            planes,
                         };
                         state.dmabuf_buffers.insert(buffer.id(), info);
+                        log::debug!("[dmabuf] Registered buffer {:?}, total dmabuf_buffers={}", buffer.id(), state.dmabuf_buffers.len());
                     }
                 }
             }
@@ -358,7 +387,7 @@ impl Dispatch<WlBuffer, DmaBufBufferData> for State {
         _client: &wayland_server::Client,
         resource: &WlBuffer,
         request: wayland_server::protocol::wl_buffer::Request,
-        data: &DmaBufBufferData,
+        _data: &DmaBufBufferData,
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {

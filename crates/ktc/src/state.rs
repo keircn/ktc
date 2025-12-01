@@ -657,6 +657,8 @@ pub struct State {
     pub shm_pools: HashMap<ObjectId, ShmPoolData>,
     pub buffers: HashMap<ObjectId, BufferData>,
     pub dmabuf_buffers: HashMap<ObjectId, DmaBufBufferInfo>,
+    
+    pub subsurfaces: HashMap<ObjectId, ObjectId>,
 
     pub frame_callbacks: Vec<WlCallback>,
 
@@ -708,14 +710,19 @@ pub struct ShmPoolData {
     pub mmap_ptr: Option<NonNull<u8>>,
 }
 
-#[derive(Clone)]
+pub struct DmaBufPlaneInfo {
+    pub fd: OwnedFd,
+    pub offset: u32,
+    pub stride: u32,
+    pub modifier: u64,
+}
+
 pub struct BufferData {
     pub pool_id: ObjectId,
     pub offset: i32,
     pub width: i32,
     pub height: i32,
     pub stride: i32,
-    #[allow(dead_code)]
     pub format: u32,
 }
 
@@ -727,6 +734,7 @@ pub struct DmaBufBufferInfo {
     pub fd: OwnedFd,
     pub stride: u32,
     pub offset: u32,
+    pub planes: Vec<DmaBufPlaneInfo>,
 }
 
 pub struct KeymapData {
@@ -764,6 +772,7 @@ impl State {
             shm_pools: HashMap::new(),
             buffers: HashMap::new(),
             dmabuf_buffers: HashMap::new(),
+            subsurfaces: HashMap::new(),
             frame_callbacks: Vec::new(),
             keyboards: Vec::new(),
             keyboard_to_window: HashMap::new(),
@@ -1016,7 +1025,7 @@ impl State {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
-        log::debug!("[window] Adding window {}", id);
+        log::debug!("[window] Adding window {} with surface {:?}", id, wl_surface.id());
         
         let (screen_width, screen_height) = self.screen_size();
         let num_windows = self.windows.len() + 1;
@@ -1109,7 +1118,17 @@ impl State {
     
     pub fn get_window_by_surface(&mut self, surface: &WlSurface) -> Option<&mut Window> {
         let surface_id = surface.id();
-        self.windows.iter_mut().find(|w| w.wl_surface.id() == surface_id)
+        if let Some(idx) = self.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
+            return Some(&mut self.windows[idx]);
+        }
+        let mut current_id = surface_id;
+        while let Some(parent_id) = self.subsurfaces.get(&current_id).cloned() {
+            if let Some(idx) = self.windows.iter().position(|w| w.wl_surface.id() == parent_id) {
+                return Some(&mut self.windows[idx]);
+            }
+            current_id = parent_id;
+        }
+        None
     }
     
     #[allow(dead_code)]
