@@ -1101,6 +1101,64 @@ impl GpuRenderer {
         }
     }
     
+    pub fn draw_cursor(&mut self, x: i32, y: i32) {
+        // W = white, B = black outline, . = transparent
+        const CURSOR: &[&str] = &[
+            "BW",
+            "BWWB",
+            "BWWWB",
+            "BWWWWB",
+            "BWWWWWB",
+            "BWWWWWWB",
+            "BWWWWWWWB",
+            "BWWWWWWWWB",
+            "BWWWWWWWWWB",
+            "BWWWWWWWWWWB",
+            "BWWWWWWBBBBB",
+            "BWWWBWWB",
+            "BWWBBWWWB",
+            "BWB.BWWWB",
+            "BB..BWWWB",
+            "B....BWWWB",
+            ".....BWWWB",
+            "......BWWB",
+            "......BBB",
+        ];
+        
+        const CURSOR_W: usize = 12;
+        const CURSOR_H: usize = 19;
+        
+        let cursor_id = u64::MAX - 1;
+        
+        if !self.shm_textures.contains_key(&cursor_id) {
+            let mut pixels = vec![0u32; CURSOR_W * CURSOR_H];
+            
+            for (dy, row) in CURSOR.iter().enumerate() {
+                for (dx, ch) in row.chars().enumerate() {
+                    let color = match ch {
+                        'W' => 0xFFFFFFFF,
+                        'B' => 0xFF000000,
+                        _ => 0x00000000,
+                    };
+                    pixels[dy * CURSOR_W + dx] = color;
+                }
+            }
+            
+            let data: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    pixels.as_ptr() as *const u8,
+                    pixels.len() * 4,
+                )
+            };
+            
+            self.upload_shm_texture(cursor_id, CURSOR_W as u32, CURSOR_H as u32, (CURSOR_W * 4) as u32, data);
+        }
+        
+        if let Some(&texture) = self.shm_textures.get(&cursor_id) {
+            self.draw_texture(texture, x, y, CURSOR_W as i32, CURSOR_H as i32);
+        }
+    }
+    
     pub fn remove_texture(&mut self, id: u64) {
         if let Some(tex) = self.shm_textures.remove(&id) {
             unsafe { self.gl.delete_texture(tex); }

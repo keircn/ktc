@@ -996,6 +996,11 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             gpu.draw_profiler(stats);
         }
         
+        if state.cursor_visible {
+            let gpu = state.gpu_renderer.as_mut().unwrap();
+            gpu.draw_cursor(state.cursor_x, state.cursor_y);
+        }
+        
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
         
