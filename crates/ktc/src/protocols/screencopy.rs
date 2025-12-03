@@ -227,7 +227,7 @@ impl State {
             None => return false,
         };
 
-        if let Some(ref gpu) = self.gpu_renderer {
+        if let Some(ref mut gpu) = self.gpu_renderer {
             let pixels = gpu.read_pixels(pending.x, pending.y, pending.width, pending.height);
 
             unsafe {

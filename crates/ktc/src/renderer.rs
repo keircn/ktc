@@ -7,7 +7,8 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::egl::context::{GlAttributes, PixelFormatRequirements};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::backend::renderer::{Bind, Frame, ImportDma, ImportMem, Renderer, Texture};
+use smithay::backend::renderer::{Bind, ExportMem, Frame, ImportDma, ImportMem, Renderer, Texture};
+use smithay::utils::Buffer as BufferCoord;
 use smithay::backend::renderer::Color32F;
 use smithay::utils::{Point, Rectangle, Size, Transform};
 
@@ -825,9 +826,46 @@ impl GpuRenderer {
         card_dev
     }
 
-    pub fn read_pixels(&self, _x: i32, _y: i32, width: i32, height: i32) -> Vec<u32> {
-        // TODO: implement using ExportMem (low priority)
-        vec![0u32; (width * height) as usize]
+    pub fn read_pixels(&mut self, x: i32, y: i32, width: i32, height: i32) -> Vec<u32> {
+        let presented_buffer = if self.current_buffer == 0 { 1 } else { 0 };
+        let dmabuf = &mut self.render_buffers[presented_buffer].dmabuf;
+        let target = match self.renderer.bind(dmabuf) {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[gpu] Failed to bind dmabuf for read_pixels: {:?}", e);
+                return vec![0u32; (width * height) as usize];
+            }
+        };
+
+        let region: Rectangle<i32, BufferCoord> = Rectangle::new(
+            Point::from((x, y)),
+            Size::from((width, height)),
+        );
+
+        let mapping = match self.renderer.copy_framebuffer(&target, region, Fourcc::Argb8888) {
+            Ok(m) => m,
+            Err(e) => {
+                log::error!("[gpu] Failed to copy framebuffer: {:?}", e);
+                return vec![0u32; (width * height) as usize];
+            }
+        };
+
+        let bytes = match self.renderer.map_texture(&mapping) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("[gpu] Failed to map texture: {:?}", e);
+                return vec![0u32; (width * height) as usize];
+            }
+        };
+
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for chunk in bytes.chunks_exact(4) {
+            // TODO: we make a possibly bad assumption here (low priority)
+            let pixel = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            pixels.push(pixel);
+        }
+
+        pixels
     }
 
     pub fn texture_count(&self) -> usize {
