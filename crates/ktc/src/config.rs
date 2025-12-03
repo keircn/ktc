@@ -1,70 +1,209 @@
-use ktc_common::{parse_color, ktc_config_dir};
+use ktc_common::{ktc_config_dir, parse_color};
 use serde::Deserialize;
 use std::path::PathBuf;
 
-fn default_title_bar_height() -> i32 { 24 }
-fn default_border_width() -> i32 { 1 }
-fn default_gap() -> i32 { 0 }
+fn default_title_bar_height() -> i32 {
+    24
+}
+fn default_border_width() -> i32 {
+    1
+}
+fn default_gap() -> i32 {
+    0
+}
 
-fn default_background_dark() -> String { "#1A1A2E".to_string() }
-fn default_background_light() -> String { "#16213E".to_string() }
-fn default_title_focused() -> String { "#2D5A88".to_string() }
-fn default_title_unfocused() -> String { "#3C3C3C".to_string() }
-fn default_border_focused() -> String { "#4A9EFF".to_string() }
-fn default_border_unfocused() -> String { "#505050".to_string() }
+fn default_background_dark() -> String {
+    "#1A1A2E".to_string()
+}
+fn default_background_light() -> String {
+    "#16213E".to_string()
+}
+fn default_title_focused() -> String {
+    "#2D5A88".to_string()
+}
+fn default_title_unfocused() -> String {
+    "#3C3C3C".to_string()
+}
+fn default_border_focused() -> String {
+    "#4A9EFF".to_string()
+}
+fn default_border_unfocused() -> String {
+    "#505050".to_string()
+}
 
-fn default_keyboard_layout() -> String { "us".to_string() }
-fn default_keyboard_model() -> String { "pc105".to_string() }
-fn default_keyboard_options() -> String { String::new() }
-fn default_repeat_rate() -> i32 { 25 }
-fn default_repeat_delay() -> i32 { 600 }
+fn default_keyboard_layout() -> String {
+    "us".to_string()
+}
+fn default_keyboard_model() -> String {
+    "pc105".to_string()
+}
+fn default_keyboard_options() -> String {
+    String::new()
+}
+fn default_repeat_rate() -> i32 {
+    25
+}
+fn default_repeat_delay() -> i32 {
+    600
+}
 
-fn default_cursor_theme() -> String { "default".to_string() }
-fn default_cursor_size() -> i32 { 24 }
+fn default_cursor_theme() -> String {
+    "default".to_string()
+}
+fn default_cursor_size() -> i32 {
+    24
+}
 
-fn default_drm_device() -> String { "auto".to_string() }
-fn default_preferred_mode() -> String { "auto".to_string() }
-fn default_vsync() -> bool { true }
-fn default_vrr() -> bool { false }
-fn default_gpu() -> bool { true }
+fn default_drm_device() -> String {
+    "auto".to_string()
+}
+fn default_preferred_mode() -> String {
+    "auto".to_string()
+}
+fn default_vsync() -> bool {
+    true
+}
+fn default_vrr() -> bool {
+    false
+}
+fn default_gpu() -> bool {
+    true
+}
 
-fn default_renderer() -> String { "opengl".to_string() }
+fn default_renderer() -> String {
+    "opengl".to_string()
+}
 
-fn default_mod_key() -> String { "alt".to_string() }
+fn default_mod_key() -> String {
+    "alt".to_string()
+}
 
 fn default_bindings() -> Vec<KeybindEntry> {
     vec![
-        KeybindEntry { key: "ctrl+alt+q".to_string(), action: "exit".to_string() },
-        KeybindEntry { key: "mod+Return".to_string(), action: "exec foot".to_string() },
-        KeybindEntry { key: "mod+d".to_string(), action: "exec fuzzel".to_string() },
-        KeybindEntry { key: "mod+j".to_string(), action: "focus next".to_string() },
-        KeybindEntry { key: "mod+k".to_string(), action: "focus prev".to_string() },
-        KeybindEntry { key: "mod+h".to_string(), action: "focus left".to_string() },
-        KeybindEntry { key: "mod+l".to_string(), action: "focus right".to_string() },
-        KeybindEntry { key: "mod+shift+j".to_string(), action: "move next".to_string() },
-        KeybindEntry { key: "mod+shift+k".to_string(), action: "move prev".to_string() },
-        KeybindEntry { key: "mod+shift+q".to_string(), action: "close".to_string() },
-        KeybindEntry { key: "mod+f".to_string(), action: "fullscreen".to_string() },
-        KeybindEntry { key: "mod+shift+space".to_string(), action: "floating toggle".to_string() },
-        KeybindEntry { key: "mod+1".to_string(), action: "workspace 1".to_string() },
-        KeybindEntry { key: "mod+2".to_string(), action: "workspace 2".to_string() },
-        KeybindEntry { key: "mod+3".to_string(), action: "workspace 3".to_string() },
-        KeybindEntry { key: "mod+4".to_string(), action: "workspace 4".to_string() },
-        KeybindEntry { key: "mod+5".to_string(), action: "workspace 5".to_string() },
-        KeybindEntry { key: "mod+6".to_string(), action: "workspace 6".to_string() },
-        KeybindEntry { key: "mod+7".to_string(), action: "workspace 7".to_string() },
-        KeybindEntry { key: "mod+8".to_string(), action: "workspace 8".to_string() },
-        KeybindEntry { key: "mod+9".to_string(), action: "workspace 9".to_string() },
-        KeybindEntry { key: "mod+shift+1".to_string(), action: "move_to_workspace 1".to_string() },
-        KeybindEntry { key: "mod+shift+2".to_string(), action: "move_to_workspace 2".to_string() },
-        KeybindEntry { key: "mod+shift+3".to_string(), action: "move_to_workspace 3".to_string() },
-        KeybindEntry { key: "mod+shift+4".to_string(), action: "move_to_workspace 4".to_string() },
-        KeybindEntry { key: "mod+shift+5".to_string(), action: "move_to_workspace 5".to_string() },
-        KeybindEntry { key: "mod+shift+6".to_string(), action: "move_to_workspace 6".to_string() },
-        KeybindEntry { key: "mod+shift+7".to_string(), action: "move_to_workspace 7".to_string() },
-        KeybindEntry { key: "mod+shift+8".to_string(), action: "move_to_workspace 8".to_string() },
-        KeybindEntry { key: "mod+shift+9".to_string(), action: "move_to_workspace 9".to_string() },
-        KeybindEntry { key: "mod+shift+c".to_string(), action: "reload".to_string() },
+        KeybindEntry {
+            key: "ctrl+alt+q".to_string(),
+            action: "exit".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+Return".to_string(),
+            action: "exec foot".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+d".to_string(),
+            action: "exec fuzzel".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+j".to_string(),
+            action: "focus next".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+k".to_string(),
+            action: "focus prev".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+h".to_string(),
+            action: "focus left".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+l".to_string(),
+            action: "focus right".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+j".to_string(),
+            action: "move next".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+k".to_string(),
+            action: "move prev".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+q".to_string(),
+            action: "close".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+f".to_string(),
+            action: "fullscreen".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+space".to_string(),
+            action: "floating toggle".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+1".to_string(),
+            action: "workspace 1".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+2".to_string(),
+            action: "workspace 2".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+3".to_string(),
+            action: "workspace 3".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+4".to_string(),
+            action: "workspace 4".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+5".to_string(),
+            action: "workspace 5".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+6".to_string(),
+            action: "workspace 6".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+7".to_string(),
+            action: "workspace 7".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+8".to_string(),
+            action: "workspace 8".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+9".to_string(),
+            action: "workspace 9".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+1".to_string(),
+            action: "move_to_workspace 1".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+2".to_string(),
+            action: "move_to_workspace 2".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+3".to_string(),
+            action: "move_to_workspace 3".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+4".to_string(),
+            action: "move_to_workspace 4".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+5".to_string(),
+            action: "move_to_workspace 5".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+6".to_string(),
+            action: "move_to_workspace 6".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+7".to_string(),
+            action: "move_to_workspace 7".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+8".to_string(),
+            action: "move_to_workspace 8".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+9".to_string(),
+            action: "move_to_workspace 9".to_string(),
+        },
+        KeybindEntry {
+            key: "mod+shift+c".to_string(),
+            action: "reload".to_string(),
+        },
     ]
 }
 
@@ -161,35 +300,38 @@ impl WorkspaceTarget {
 pub enum Action {
     Exit,
     Reload,
-    
+
     Exec(String),
     ExecSpawn(String),
-    
+
     Close,
     Kill,
-    
+
     Focus(Direction),
     Move(Direction),
     Swap(Direction),
-    
+
     Fullscreen(ToggleState),
     Floating(ToggleState),
     Maximize(ToggleState),
-    
-    Resize { direction: ResizeDirection, amount: i32 },
-    
+
+    Resize {
+        direction: ResizeDirection,
+        amount: i32,
+    },
+
     Workspace(WorkspaceTarget),
     MoveToWorkspace(WorkspaceTarget),
     MoveToWorkspaceSilent(WorkspaceTarget),
-    
+
     SplitHorizontal,
     SplitVertical,
     SplitToggle,
-    
+
     LayoutNext,
     LayoutPrev,
     LayoutSet(String),
-    
+
     CursorTheme(String),
 }
 
@@ -197,14 +339,14 @@ impl Action {
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         let (cmd, args) = match s.find(' ') {
-            Some(i) => (s[..i].trim(), s[i+1..].trim()),
+            Some(i) => (s[..i].trim(), s[i + 1..].trim()),
             None => (s, ""),
         };
-        
+
         match cmd.to_lowercase().as_str() {
             "exit" | "quit" => Some(Action::Exit),
             "reload" | "reload_config" => Some(Action::Reload),
-            
+
             "exec" => {
                 if args.is_empty() {
                     None
@@ -219,10 +361,10 @@ impl Action {
                     Some(Action::ExecSpawn(args.to_string()))
                 }
             }
-            
+
             "close" | "close_window" => Some(Action::Close),
             "kill" | "kill_window" | "killactive" => Some(Action::Kill),
-            
+
             "focus" | "focus_window" => {
                 if args.is_empty() {
                     Some(Action::Focus(Direction::Next))
@@ -232,7 +374,7 @@ impl Action {
             }
             "focus_next" => Some(Action::Focus(Direction::Next)),
             "focus_prev" => Some(Action::Focus(Direction::Prev)),
-            
+
             "move" | "move_window" | "movewindow" => {
                 if args.is_empty() {
                     Some(Action::Move(Direction::Next))
@@ -240,7 +382,7 @@ impl Action {
                     Direction::parse(args).map(Action::Move)
                 }
             }
-            
+
             "swap" | "swap_window" | "swapwindow" => {
                 if args.is_empty() {
                     Some(Action::Swap(Direction::Next))
@@ -248,7 +390,7 @@ impl Action {
                     Direction::parse(args).map(Action::Swap)
                 }
             }
-            
+
             "fullscreen" | "togglefullscreen" => {
                 if args.is_empty() {
                     Some(Action::Fullscreen(ToggleState::Toggle))
@@ -256,7 +398,7 @@ impl Action {
                     ToggleState::parse(args).map(Action::Fullscreen)
                 }
             }
-            
+
             "floating" | "togglefloating" => {
                 if args.is_empty() {
                     Some(Action::Floating(ToggleState::Toggle))
@@ -264,7 +406,7 @@ impl Action {
                     ToggleState::parse(args).map(Action::Floating)
                 }
             }
-            
+
             "maximize" | "togglemaximize" => {
                 if args.is_empty() {
                     Some(Action::Maximize(ToggleState::Toggle))
@@ -272,21 +414,27 @@ impl Action {
                     ToggleState::parse(args).map(Action::Maximize)
                 }
             }
-            
+
             "resize" | "resizeactive" => {
                 let parts: Vec<&str> = args.split_whitespace().collect();
                 if parts.len() >= 2 {
                     let dir = ResizeDirection::parse(parts[0])?;
                     let amount = parts[1].parse().unwrap_or(10);
-                    Some(Action::Resize { direction: dir, amount })
+                    Some(Action::Resize {
+                        direction: dir,
+                        amount,
+                    })
                 } else if parts.len() == 1 {
                     let dir = ResizeDirection::parse(parts[0])?;
-                    Some(Action::Resize { direction: dir, amount: 10 })
+                    Some(Action::Resize {
+                        direction: dir,
+                        amount: 10,
+                    })
                 } else {
                     None
                 }
             }
-            
+
             "workspace" | "switch_workspace" => {
                 if args.is_empty() {
                     None
@@ -294,7 +442,7 @@ impl Action {
                     WorkspaceTarget::parse(args).map(Action::Workspace)
                 }
             }
-            
+
             "move_to_workspace" | "movetoworkspace" => {
                 if args.is_empty() {
                     None
@@ -302,7 +450,7 @@ impl Action {
                     WorkspaceTarget::parse(args).map(Action::MoveToWorkspace)
                 }
             }
-            
+
             "move_to_workspace_silent" | "movetoworkspacesilent" => {
                 if args.is_empty() {
                     None
@@ -310,11 +458,11 @@ impl Action {
                     WorkspaceTarget::parse(args).map(Action::MoveToWorkspaceSilent)
                 }
             }
-            
+
             "split_horizontal" | "splith" => Some(Action::SplitHorizontal),
             "split_vertical" | "splitv" => Some(Action::SplitVertical),
             "split_toggle" | "splitt" => Some(Action::SplitToggle),
-            
+
             "layout_next" | "layout" if args == "next" => Some(Action::LayoutNext),
             "layout_prev" | "layout" if args == "prev" => Some(Action::LayoutPrev),
             "layout_set" | "layout" => {
@@ -324,7 +472,7 @@ impl Action {
                     Some(Action::LayoutSet(args.to_string()))
                 }
             }
-            
+
             "cursor_theme" | "setcursor" => {
                 if args.is_empty() {
                     None
@@ -332,7 +480,7 @@ impl Action {
                     Some(Action::CursorTheme(args.to_string()))
                 }
             }
-            
+
             _ => None,
         }
     }
@@ -367,20 +515,20 @@ pub struct DebugConfig {
 pub struct DisplayConfig {
     #[serde(default = "default_drm_device")]
     pub device: String,
-    
+
     #[serde(default = "default_preferred_mode")]
     pub mode: String,
-    
+
     #[serde(default = "default_vsync")]
     pub vsync: bool,
-    
+
     #[serde(default = "default_vrr")]
     #[allow(dead_code)]
     pub vrr: bool,
-    
+
     #[serde(default = "default_gpu")]
     pub gpu: bool,
-    
+
     #[serde(default = "default_renderer")]
     #[allow(dead_code)]
     pub renderer: String,
@@ -406,24 +554,26 @@ impl DisplayConfig {
             path => Some(path.to_string()),
         }
     }
-    
+
     pub fn parse_mode(&self) -> Option<(u16, u16, Option<u32>)> {
         if self.mode == "auto" || self.mode.is_empty() {
             return None;
         }
-        
+
         let parts: Vec<&str> = self.mode.split('@').collect();
         let resolution = parts.first()?;
-        let refresh = parts.get(1).and_then(|r| r.trim_end_matches("Hz").parse().ok());
-        
+        let refresh = parts
+            .get(1)
+            .and_then(|r| r.trim_end_matches("Hz").parse().ok());
+
         let dims: Vec<&str> = resolution.split('x').collect();
         if dims.len() != 2 {
             return None;
         }
-        
+
         let width: u16 = dims[0].parse().ok()?;
         let height: u16 = dims[1].parse().ok()?;
-        
+
         Some((width, height, refresh))
     }
 }
@@ -485,7 +635,7 @@ pub struct CursorConfig {
 pub struct KeybindsConfig {
     #[serde(default = "default_mod_key")]
     pub mod_key: String,
-    
+
     #[serde(default = "default_bindings")]
     pub bind: Vec<KeybindEntry>,
 }
@@ -515,7 +665,7 @@ impl KeybindsConfig {
         let mut shift = false;
         let mut super_key = false;
         let mut key_part = "";
-        
+
         for part in bind_str.split('+') {
             let part = part.trim().to_lowercase();
             match part.as_str() {
@@ -523,24 +673,29 @@ impl KeybindsConfig {
                 "alt" => alt = true,
                 "shift" => shift = true,
                 "super" | "mod4" | "logo" | "win" | "meta" => super_key = true,
-                "mod" => {
-                    match self.mod_key.to_lowercase().as_str() {
-                        "alt" => alt = true,
-                        "super" | "mod4" | "logo" | "win" | "meta" => super_key = true,
-                        "ctrl" | "control" => ctrl = true,
-                        _ => alt = true,
-                    }
-                }
+                "mod" => match self.mod_key.to_lowercase().as_str() {
+                    "alt" => alt = true,
+                    "super" | "mod4" | "logo" | "win" | "meta" => super_key = true,
+                    "ctrl" | "control" => ctrl = true,
+                    _ => alt = true,
+                },
                 _ => key_part = Box::leak(part.into_boxed_str()),
             }
         }
-        
+
         let keysym = keysym_from_name(key_part)?;
-        Some(Keybind { ctrl, alt, shift, super_key, keysym })
+        Some(Keybind {
+            ctrl,
+            alt,
+            shift,
+            super_key,
+            keysym,
+        })
     }
-    
+
     pub fn get_all_bindings(&self) -> Vec<(Action, Keybind)> {
-        self.bind.iter()
+        self.bind
+            .iter()
             .filter_map(|entry| {
                 let keybind = self.parse_keybind(&entry.key)?;
                 let action = Action::parse(&entry.action)?;
@@ -548,12 +703,14 @@ impl KeybindsConfig {
             })
             .collect()
     }
-    
+
     #[allow(dead_code)]
     pub fn get_all_bindings_raw(&self) -> Vec<(String, Keybind)> {
-        self.bind.iter()
+        self.bind
+            .iter()
             .filter_map(|entry| {
-                self.parse_keybind(&entry.key).map(|kb| (entry.action.clone(), kb))
+                self.parse_keybind(&entry.key)
+                    .map(|kb| (entry.action.clone(), kb))
             })
             .collect()
     }
@@ -561,7 +718,7 @@ impl KeybindsConfig {
 
 fn keysym_from_name(name: &str) -> Option<u32> {
     use xkbcommon::xkb::keysyms::*;
-    
+
     Some(match name.to_lowercase().as_str() {
         "a" => KEY_a,
         "b" => KEY_b,
@@ -743,10 +900,9 @@ impl Config {
     }
 
     fn load_from_path(path: &PathBuf) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse TOML: {}", e))
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+        toml::from_str(&content).map_err(|e| format!("Failed to parse TOML: {}", e))
     }
 
     pub fn title_bar_height(&self) -> i32 {

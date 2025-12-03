@@ -1,10 +1,10 @@
-use wayland_server::{GlobalDispatch, Dispatch, Resource};
-use wayland_server::protocol::wl_output::WlOutput;
+use crate::state::State;
 use wayland_protocols::xdg::xdg_output::zv1::server::{
     zxdg_output_manager_v1::{self, ZxdgOutputManagerV1},
     zxdg_output_v1::{self, ZxdgOutputV1},
 };
-use crate::state::State;
+use wayland_server::protocol::wl_output::WlOutput;
+use wayland_server::{Dispatch, GlobalDispatch, Resource};
 
 impl GlobalDispatch<ZxdgOutputManagerV1, ()> for State {
     fn bind(
@@ -64,7 +64,7 @@ impl State {
 
             if xdg_output.version() >= 2 {
                 xdg_output.name(output.name.clone());
-                
+
                 let description = format!("{} {}", output.make, output.model);
                 xdg_output.description(description);
             }

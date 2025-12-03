@@ -1,16 +1,19 @@
+use chrono::Local;
+use ktc_common::{ipc_socket_path, AppLogger, Font, IpcCommand, IpcEvent, WorkspaceInfo};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::io::AsFd;
+use std::os::unix::net::UnixStream;
 use wayland_client::{
+    protocol::{
+        wl_buffer, wl_callback, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool,
+        wl_surface,
+    },
     Connection, Dispatch, QueueHandle,
-    protocol::{wl_registry, wl_compositor, wl_shm, wl_surface, wl_buffer, wl_output, wl_shm_pool, wl_callback},
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
 };
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::io::AsFd;
-use std::os::unix::net::UnixStream;
-use chrono::Local;
-use ktc_common::{AppLogger, Font, IpcCommand, IpcEvent, WorkspaceInfo, ipc_socket_path};
 
 const BAR_HEIGHT: u32 = 24;
 const BG_COLOR: u32 = 0xFF1A1A2E;
@@ -32,17 +35,17 @@ impl IpcClient {
         let reader = BufReader::new(stream.try_clone().ok()?);
         Some(Self { stream, reader })
     }
-    
+
     fn send_command(&mut self, cmd: &IpcCommand) {
         if let Ok(json) = serde_json::to_string(cmd) {
             let _ = writeln!(self.stream, "{}", json);
         }
     }
-    
+
     fn poll_events(&mut self) -> Vec<IpcEvent> {
         let mut events = Vec::new();
         let mut line = String::new();
-        
+
         loop {
             line.clear();
             match self.reader.read_line(&mut line) {
@@ -56,7 +59,7 @@ impl IpcClient {
                 Err(_) => break,
             }
         }
-        
+
         events
     }
 }
@@ -84,7 +87,7 @@ impl AppState {
     fn new() -> Self {
         let ipc_client = IpcClient::connect();
         let workspaces = (1..=4).map(WorkspaceInfo::new).collect();
-        
+
         Self {
             compositor: None,
             layer_shell: None,
@@ -104,29 +107,36 @@ impl AppState {
             ipc_client,
         }
     }
-    
+
     fn request_state(&mut self) {
         if let Some(ref mut ipc) = self.ipc_client {
             ipc.send_command(&IpcCommand::GetState);
         }
     }
-    
+
     fn poll_ipc(&mut self) {
         let events = if let Some(ref mut ipc) = self.ipc_client {
             ipc.poll_events()
         } else {
             return;
         };
-        
+
         for event in events {
             match event {
-                IpcEvent::State { workspaces, active_workspace, focused_window } => {
+                IpcEvent::State {
+                    workspaces,
+                    active_workspace,
+                    focused_window,
+                } => {
                     self.workspaces = workspaces;
                     self.active_workspace = active_workspace;
                     self.focused_title = focused_window;
                     self.needs_redraw = true;
                 }
-                IpcEvent::WorkspaceChanged { workspaces, active_workspace } => {
+                IpcEvent::WorkspaceChanged {
+                    workspaces,
+                    active_workspace,
+                } => {
                     self.workspaces = workspaces;
                     self.active_workspace = active_workspace;
                     self.needs_redraw = true;
@@ -144,8 +154,12 @@ impl AppState {
     }
 
     fn create_layer_surface(&mut self, qh: &QueueHandle<Self>) {
-        let Some(compositor) = &self.compositor else { return };
-        let Some(layer_shell) = &self.layer_shell else { return };
+        let Some(compositor) = &self.compositor else {
+            return;
+        };
+        let Some(layer_shell) = &self.layer_shell else {
+            return;
+        };
 
         let surface = compositor.create_surface(qh, ());
         let layer_surface = layer_shell.get_layer_surface(
@@ -242,7 +256,7 @@ impl AppState {
         for ws in &self.workspaces {
             let is_active = ws.id == self.active_workspace;
             let has_windows = ws.window_count > 0;
-            
+
             let color = if is_active {
                 ACTIVE_WS_COLOR
             } else if has_windows {
@@ -252,15 +266,25 @@ impl AppState {
             };
 
             if is_active {
-                fill_rect(pixels, stride, self.height as usize, current_x - 2, y - 2, ws_width, self.font.char_height() + 4, 0xFF2D3A4A);
+                fill_rect(
+                    pixels,
+                    stride,
+                    self.height as usize,
+                    current_x - 2,
+                    y - 2,
+                    ws_width,
+                    self.font.char_height() + 4,
+                    0xFF2D3A4A,
+                );
             }
 
             let num = char::from_digit(ws.id as u32, 10).unwrap_or('?');
-            self.font.draw_char(pixels, stride, current_x + 2, y, num, color);
+            self.font
+                .draw_char(pixels, stride, current_x + 2, y, num, color);
             current_x += ws_width + 4;
         }
     }
-    
+
     fn draw_title(&self, pixels: &mut [u32], stride: usize, y: usize) {
         if let Some(ref title) = self.focused_title {
             let max_title_len = 40;
@@ -269,22 +293,33 @@ impl AppState {
             } else {
                 title.clone()
             };
-            
+
             let title_width = self.font.text_width(&title);
             let center_x = (self.width as usize / 2).saturating_sub(title_width / 2);
-            self.font.draw_text(pixels, stride, center_x, y, &title, TEXT_COLOR);
+            self.font
+                .draw_text(pixels, stride, center_x, y, &title, TEXT_COLOR);
         }
     }
 
     fn draw_clock(&self, pixels: &mut [u32], stride: usize, right_x: usize, y: usize) {
         let now = Local::now();
         let time_str = now.format("%H:%M").to_string();
-        self.font.draw_text_right(pixels, stride, right_x, y, &time_str, TEXT_COLOR);
+        self.font
+            .draw_text_right(pixels, stride, right_x, y, &time_str, TEXT_COLOR);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fill_rect(pixels: &mut [u32], stride: usize, height: usize, x: usize, y: usize, w: usize, h: usize, color: u32) {
+fn fill_rect(
+    pixels: &mut [u32],
+    stride: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: u32,
+) {
     for dy in 0..h {
         for dx in 0..w {
             let px = x + dx;
@@ -302,10 +337,14 @@ fn fill_rect(pixels: &mut [u32], stride: usize, height: usize, x: usize, y: usiz
 fn create_shm_file(size: usize) -> std::fs::File {
     use std::os::unix::io::FromRawFd;
 
-    let name = format!("/ktcbar-{}-{}", std::process::id(), std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0));
+    let name = format!(
+        "/ktcbar-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let fd = unsafe {
         libc::shm_open(
             std::ffi::CString::new(name.clone()).unwrap().as_ptr(),
@@ -334,7 +373,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for AppState {
         _conn: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
             match interface.as_str() {
                 "wl_compositor" => {
                     state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
@@ -364,7 +408,8 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for AppState {
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<wl_shm::WlShm, ()> for AppState {
@@ -375,7 +420,8 @@ impl Dispatch<wl_shm::WlShm, ()> for AppState {
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppState {
@@ -386,7 +432,8 @@ impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppState {
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<wl_output::WlOutput, ()> for AppState {
@@ -397,7 +444,8 @@ impl Dispatch<wl_output::WlOutput, ()> for AppState {
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<wl_surface::WlSurface, ()> for AppState {
@@ -408,7 +456,8 @@ impl Dispatch<wl_surface::WlSurface, ()> for AppState {
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<wl_buffer::WlBuffer, ()> for AppState {
@@ -452,7 +501,8 @@ impl Dispatch<ZwlrLayerShellV1, ()> for AppState {
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
@@ -465,7 +515,11 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
                 layer_surface.ack_configure(serial);
                 state.width = width;
                 state.height = if height > 0 { height } else { BAR_HEIGHT };
@@ -483,7 +537,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppState {
 
 fn main() {
     let _ = AppLogger::init("ktcbar");
-    
+
     let conn = Connection::connect_to_env().expect("Failed to connect to Wayland");
     let display = conn.display();
 
@@ -497,7 +551,7 @@ fn main() {
     event_queue.roundtrip(&mut state).expect("Roundtrip failed");
 
     state.create_layer_surface(&qh);
-    
+
     state.request_state();
 
     event_queue.roundtrip(&mut state).expect("Roundtrip failed");
@@ -508,12 +562,12 @@ fn main() {
 
     while state.running {
         state.poll_ipc();
-        
+
         if last_clock_update.elapsed() >= clock_interval {
             state.needs_redraw = true;
             last_clock_update = Instant::now();
         }
-        
+
         if state.needs_redraw && state.configured {
             state.draw(&qh);
         }

@@ -1,16 +1,19 @@
+use crate::state::{OutputId, OutputTransform, State};
 use std::collections::HashMap;
-use std::sync::{Mutex, atomic::{AtomicU32, Ordering}};
-use wayland_server::{Dispatch, DisplayHandle, GlobalDispatch, Resource};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Mutex,
+};
+use wayland_protocols_wlr::output_management::v1::server::{
+    zwlr_output_configuration_head_v1::{self, ZwlrOutputConfigurationHeadV1},
+    zwlr_output_configuration_v1::{self, ZwlrOutputConfigurationV1},
+    zwlr_output_head_v1::{self, ZwlrOutputHeadV1},
+    zwlr_output_manager_v1::{self, ZwlrOutputManagerV1},
+    zwlr_output_mode_v1::{self, ZwlrOutputModeV1},
+};
 use wayland_server::backend::ObjectId;
 use wayland_server::protocol::wl_output::Transform;
-use wayland_protocols_wlr::output_management::v1::server::{
-    zwlr_output_manager_v1::{self, ZwlrOutputManagerV1},
-    zwlr_output_head_v1::{self, ZwlrOutputHeadV1},
-    zwlr_output_mode_v1::{self, ZwlrOutputModeV1},
-    zwlr_output_configuration_v1::{self, ZwlrOutputConfigurationV1},
-    zwlr_output_configuration_head_v1::{self, ZwlrOutputConfigurationHeadV1},
-};
-use crate::state::{State, OutputId, OutputTransform};
+use wayland_server::{Dispatch, DisplayHandle, GlobalDispatch, Resource};
 
 static CONFIG_SERIAL: AtomicU32 = AtomicU32::new(1);
 
@@ -117,7 +120,7 @@ impl Dispatch<ZwlrOutputManagerV1, OutputManagerData> for State {
                     used: false,
                 };
                 let config = data_init.init(id, config_data);
-                
+
                 if serial != current_serial {
                     config.cancelled();
                 }
@@ -179,28 +182,27 @@ impl Dispatch<ZwlrOutputConfigurationV1, OutputConfigurationData> for State {
             zwlr_output_configuration_v1::Request::EnableHead { id, head } => {
                 let head_data: &OutputHeadData = head.data().unwrap();
                 let output_id = head_data.output_id;
-                
+
                 let config_head_data = OutputConfigurationHeadData {
                     output_id,
                     config_id: resource.id(),
                 };
                 let _config_head = data_init.init(id, config_head_data);
             }
-            zwlr_output_configuration_v1::Request::DisableHead { head: _ } => {
-            }
+            zwlr_output_configuration_v1::Request::DisableHead { head: _ } => {}
             zwlr_output_configuration_v1::Request::Apply => {
                 if data.used {
                     return;
                 }
-                
+
                 let current_serial = CONFIG_SERIAL.load(Ordering::Relaxed);
                 if data.serial != current_serial {
                     resource.cancelled();
                     return;
                 }
-                
+
                 resource.succeeded();
-                
+
                 CONFIG_SERIAL.fetch_add(1, Ordering::Relaxed);
                 state.broadcast_output_manager_done();
             }
@@ -208,13 +210,13 @@ impl Dispatch<ZwlrOutputConfigurationV1, OutputConfigurationData> for State {
                 if data.used {
                     return;
                 }
-                
+
                 let current_serial = CONFIG_SERIAL.load(Ordering::Relaxed);
                 if data.serial != current_serial {
                     resource.cancelled();
                     return;
                 }
-                
+
                 resource.succeeded();
             }
             zwlr_output_configuration_v1::Request::Destroy => {}
@@ -235,7 +237,11 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, OutputConfigurationHeadData> for St
     ) {
         match request {
             zwlr_output_configuration_head_v1::Request::SetMode { mode: _ } => {}
-            zwlr_output_configuration_head_v1::Request::SetCustomMode { width: _, height: _, refresh: _ } => {}
+            zwlr_output_configuration_head_v1::Request::SetCustomMode {
+                width: _,
+                height: _,
+                refresh: _,
+            } => {}
             zwlr_output_configuration_head_v1::Request::SetPosition { x: _, y: _ } => {}
             zwlr_output_configuration_head_v1::Request::SetTransform { transform: _ } => {}
             zwlr_output_configuration_head_v1::Request::SetScale { scale: _ } => {}
@@ -254,26 +260,28 @@ impl State {
     ) {
         let manager_version = manager.version();
         let manager_data = manager.data::<OutputManagerData>().unwrap();
-        
+
         for output in &self.outputs {
             let head_version = manager_version.min(4);
             let head: ZwlrOutputHeadV1 = client
                 .create_resource::<ZwlrOutputHeadV1, _, Self>(
                     dhandle,
                     head_version,
-                    OutputHeadData { output_id: output.id },
+                    OutputHeadData {
+                        output_id: output.id,
+                    },
                 )
                 .unwrap();
-            
+
             manager.head(&head);
-            
+
             head.name(output.name.clone());
             head.description(format!("{} {}", output.make, output.model));
-            
+
             if output.physical_width > 0 && output.physical_height > 0 {
                 head.physical_size(output.physical_width, output.physical_height);
             }
-            
+
             let mode_version = head_version.min(3);
             let mode: ZwlrOutputModeV1 = client
                 .create_resource::<ZwlrOutputModeV1, _, Self>(
@@ -287,37 +295,37 @@ impl State {
                     },
                 )
                 .unwrap();
-            
+
             head.mode(&mode);
-            
+
             mode.size(output.width, output.height);
             mode.refresh(output.refresh);
             mode.preferred();
-            
+
             head.enabled(1);
             head.current_mode(&mode);
             head.position(output.x, output.y);
             head.transform(output_transform_to_wl(output.transform));
             head.scale(output.scale as f64);
-            
+
             if head.version() >= 2 {
                 head.make(output.make.clone());
                 head.model(output.model.clone());
             }
-            
+
             if head.version() >= 4 {
                 head.adaptive_sync(zwlr_output_head_v1::AdaptiveSyncState::Disabled);
             }
-            
+
             let mut inner = manager_data.inner.lock().unwrap();
             inner.heads.insert(output.id, head);
             inner.modes.insert(output.id, mode);
         }
-        
+
         let serial = CONFIG_SERIAL.load(Ordering::Relaxed);
         manager.done(serial);
     }
-    
+
     pub fn broadcast_output_manager_done(&self) {
         let serial = CONFIG_SERIAL.load(Ordering::Relaxed);
         let _ = serial;

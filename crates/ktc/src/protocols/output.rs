@@ -1,11 +1,11 @@
-use wayland_server::{GlobalDispatch, Dispatch};
+use crate::state::State;
 use wayland_server::protocol::{
+    wl_buffer::{self, WlBuffer},
     wl_output::{self, WlOutput},
     wl_shm::{self, WlShm},
     wl_shm_pool::{self, WlShmPool},
-    wl_buffer::{self, WlBuffer},
 };
-use crate::state::State;
+use wayland_server::{Dispatch, GlobalDispatch};
 
 impl GlobalDispatch<WlOutput, ()> for State {
     fn bind(
@@ -17,7 +17,7 @@ impl GlobalDispatch<WlOutput, ()> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         let output = data_init.init(resource, ());
-        
+
         state.register_wl_output(output);
     }
 }
@@ -31,7 +31,8 @@ impl Dispatch<WlOutput, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl GlobalDispatch<WlShm, ()> for State {
@@ -77,10 +78,31 @@ impl Dispatch<WlShmPool, ()> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         match request {
-            wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } => {
+            wl_shm_pool::Request::CreateBuffer {
+                id,
+                offset,
+                width,
+                height,
+                stride,
+                format,
+            } => {
                 let buffer = data_init.init(id, ());
-                log::debug!("[buffer] CreateBuffer: {}x{} stride={} offset={}", width, height, stride, offset);
-                state.add_buffer(&buffer, resource, offset, width, height, stride, format.into());
+                log::debug!(
+                    "[buffer] CreateBuffer: {}x{} stride={} offset={}",
+                    width,
+                    height,
+                    stride,
+                    offset
+                );
+                state.add_buffer(
+                    &buffer,
+                    resource,
+                    offset,
+                    width,
+                    height,
+                    stride,
+                    format.into(),
+                );
             }
             wl_shm_pool::Request::Resize { size } => {
                 state.resize_shm_pool(resource, size);
@@ -100,5 +122,6 @@ impl Dispatch<WlBuffer, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }

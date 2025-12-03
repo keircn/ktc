@@ -1,9 +1,9 @@
-use wayland_server::{GlobalDispatch, Dispatch};
+use crate::state::State;
 use wayland_protocols::xdg::decoration::zv1::server::{
     zxdg_decoration_manager_v1::{self, ZxdgDecorationManagerV1},
-    zxdg_toplevel_decoration_v1::{self, ZxdgToplevelDecorationV1, Mode},
+    zxdg_toplevel_decoration_v1::{self, Mode, ZxdgToplevelDecorationV1},
 };
-use crate::state::State;
+use wayland_server::{Dispatch, GlobalDispatch};
 
 pub struct XdgDecorationGlobal;
 

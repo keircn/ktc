@@ -1,11 +1,11 @@
-use wayland_server::protocol::wl_buffer::WlBuffer;
-use wayland_server::protocol::wl_shm;
-use wayland_server::{Dispatch, GlobalDispatch, Resource};
+use crate::state::{Rectangle, ScreencopyFrameState, State};
 use wayland_protocols_wlr::screencopy::v1::server::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::{self, ZwlrScreencopyManagerV1},
 };
-use crate::state::{State, ScreencopyFrameState, Rectangle};
+use wayland_server::protocol::wl_buffer::WlBuffer;
+use wayland_server::protocol::wl_shm;
+use wayland_server::{Dispatch, GlobalDispatch, Resource};
 
 impl GlobalDispatch<ZwlrScreencopyManagerV1, ()> for State {
     fn bind(
@@ -88,7 +88,9 @@ impl Dispatch<ZwlrScreencopyFrameV1, ScreencopyFrameState> for State {
                 state.queue_screencopy_frame(resource.clone(), buffer, data, true);
             }
             zwlr_screencopy_frame_v1::Request::Destroy => {
-                state.screencopy_frames.retain(|f| f.frame.id() != resource.id());
+                state
+                    .screencopy_frames
+                    .retain(|f| f.frame.id() != resource.id());
             }
             _ => {}
         }
@@ -132,7 +134,7 @@ impl State {
         if self.screencopy_frames.is_empty() {
             return;
         }
-        
+
         let mut frames = std::mem::take(&mut self.screencopy_frames);
         let mut deferred = Vec::new();
 
@@ -158,7 +160,9 @@ impl State {
 
                 if pending.with_damage && pending.frame.version() >= 2 {
                     if damage_region.is_empty() {
-                        pending.frame.damage(0, 0, pending.width as u32, pending.height as u32);
+                        pending
+                            .frame
+                            .damage(0, 0, pending.width as u32, pending.height as u32);
                     } else {
                         let rel_x = (damage_region.x - pending.x).max(0) as u32;
                         let rel_y = (damage_region.y - pending.y).max(0) as u32;
@@ -168,7 +172,9 @@ impl State {
                     }
                 }
 
-                pending.frame.flags(zwlr_screencopy_frame_v1::Flags::empty());
+                pending
+                    .frame
+                    .flags(zwlr_screencopy_frame_v1::Flags::empty());
                 pending.frame.ready((secs >> 32) as u32, secs as u32, nsecs);
             } else {
                 log::error!("[screencopy] Frame copy failed");
@@ -223,14 +229,10 @@ impl State {
 
         if let Some(ref gpu) = self.gpu_renderer {
             let pixels = gpu.read_pixels(pending.x, pending.y, pending.width, pending.height);
-            
+
             unsafe {
                 let dst_ptr = mmap_ptr.as_ptr().add(buffer_data.offset as usize) as *mut u32;
-                std::ptr::copy_nonoverlapping(
-                    pixels.as_ptr(),
-                    dst_ptr,
-                    pixels.len(),
-                );
+                std::ptr::copy_nonoverlapping(pixels.as_ptr(), dst_ptr, pixels.len());
             }
         } else {
             let canvas_pixels = self.canvas.as_slice();

@@ -30,7 +30,15 @@ impl Font {
         text.len() * self.char_width()
     }
 
-    pub fn draw_char(&self, pixels: &mut [u32], stride: usize, x: usize, y: usize, ch: char, color: u32) {
+    pub fn draw_char(
+        &self,
+        pixels: &mut [u32],
+        stride: usize,
+        x: usize,
+        y: usize,
+        ch: char,
+        color: u32,
+    ) {
         let idx = if ch.is_ascii() && ch >= ' ' {
             (ch as usize) - 32
         } else {
@@ -62,13 +70,29 @@ impl Font {
         }
     }
 
-    pub fn draw_text(&self, pixels: &mut [u32], stride: usize, x: usize, y: usize, text: &str, color: u32) {
+    pub fn draw_text(
+        &self,
+        pixels: &mut [u32],
+        stride: usize,
+        x: usize,
+        y: usize,
+        text: &str,
+        color: u32,
+    ) {
         for (i, ch) in text.chars().enumerate() {
             self.draw_char(pixels, stride, x + i * self.char_width(), y, ch, color);
         }
     }
 
-    pub fn draw_text_right(&self, pixels: &mut [u32], stride: usize, right_x: usize, y: usize, text: &str, color: u32) {
+    pub fn draw_text_right(
+        &self,
+        pixels: &mut [u32],
+        stride: usize,
+        right_x: usize,
+        y: usize,
+        text: &str,
+        color: u32,
+    ) {
         let width = self.text_width(text);
         if right_x >= width {
             self.draw_text(pixels, stride, right_x - width, y, text, color);

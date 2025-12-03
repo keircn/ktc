@@ -1,13 +1,13 @@
-use input::event::{Event, EventTrait};
+pub use input::event::keyboard::KeyState;
 use input::event::keyboard::KeyboardEventTrait;
 use input::event::pointer::PointerScrollEvent;
-pub use input::event::keyboard::KeyState;
+use input::event::{Event, EventTrait};
 use input::{Libinput, LibinputInterface};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::collections::HashMap;
 use xkbcommon::xkb;
 
 use crate::config::{Action, Keybind};
@@ -22,10 +22,7 @@ impl LibinputInterface for Interface {
             .write(flags & libc::O_RDWR != 0)
             .open(path)
         {
-            Ok(file) => {
-
-                Ok(file.into())
-            }
+            Ok(file) => Ok(file.into()),
             Err(err) => {
                 log::warn!("[input] Failed to open {}: {}", path.display(), err);
                 Err(err.raw_os_error().unwrap_or(-1))
@@ -156,9 +153,10 @@ pub struct InputHandler {
 impl InputHandler {
     pub fn new(keybinds: Vec<(Action, Keybind)>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut libinput = Libinput::new_with_udev(Interface);
-        libinput.udev_assign_seat("seat0")
+        libinput
+            .udev_assign_seat("seat0")
             .map_err(|_| "Failed to assign udev seat")?;
-        
+
         libinput.dispatch()?;
         let mut keyboard_count = 0;
         let mut pointer_count = 0;
@@ -175,20 +173,21 @@ impl InputHandler {
                 }
             }
         }
-        
+
         if keyboard_count == 0 {
             log::error!("[input] No keyboard devices found! Check /dev/input permissions or add user to 'input' group");
         }
         if pointer_count == 0 {
             log::warn!("[input] No pointer devices found");
         }
-        
+
         let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        
-        let keybind_map: HashMap<Keybind, Action> = keybinds.into_iter()
+
+        let keybind_map: HashMap<Keybind, Action> = keybinds
+            .into_iter()
             .map(|(action, keybind)| (keybind, action))
             .collect();
-        
+
         Ok(InputHandler {
             libinput,
             xkb_context,
@@ -201,7 +200,7 @@ impl InputHandler {
             keybinds: keybind_map,
         })
     }
-    
+
     pub fn dispatch(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.libinput.dispatch()?;
         Ok(())
@@ -209,11 +208,11 @@ impl InputHandler {
 
     pub fn poll_frame(&mut self) -> &InputFrame {
         self.frame.reset();
-        
+
         let mut keyboard_events = Vec::new();
         let mut pointer_events = Vec::new();
         let mut has_keyboard_device = false;
-        
+
         for event in &mut self.libinput {
             match event {
                 Event::Keyboard(keyboard_event) => {
@@ -236,32 +235,36 @@ impl InputHandler {
                 _ => {}
             }
         }
-        
+
         for pointer_event in pointer_events {
             self.handle_pointer_event(pointer_event);
         }
-        
+
         if has_keyboard_device {
             self.init_xkb_state();
         }
-        
+
         for (key, state) in keyboard_events {
             self.handle_keyboard_key_batched(key, state);
         }
-        
+
         &self.frame
     }
 
     fn handle_pointer_event(&mut self, pointer_event: input::event::PointerEvent) {
-        use input::event::PointerEvent;
         use input::event::pointer::ButtonState;
-        
+        use input::event::PointerEvent;
+
         match pointer_event {
             PointerEvent::Motion(motion) => {
-                self.frame.pointer.accumulate_relative(motion.dx(), motion.dy());
+                self.frame
+                    .pointer
+                    .accumulate_relative(motion.dx(), motion.dy());
             }
             PointerEvent::MotionAbsolute(abs) => {
-                self.frame.pointer.set_absolute(abs.absolute_x(), abs.absolute_y());
+                self.frame
+                    .pointer
+                    .set_absolute(abs.absolute_x(), abs.absolute_y());
             }
             PointerEvent::Button(btn) => {
                 self.frame.buttons.push(ButtonEvent {
@@ -270,8 +273,10 @@ impl InputHandler {
                 });
             }
             PointerEvent::ScrollWheel(scroll) => {
-                let h = scroll.scroll_value_v120(input::event::pointer::Axis::Horizontal) / 120.0 * 15.0;
-                let v = scroll.scroll_value_v120(input::event::pointer::Axis::Vertical) / 120.0 * 15.0;
+                let h = scroll.scroll_value_v120(input::event::pointer::Axis::Horizontal) / 120.0
+                    * 15.0;
+                let v =
+                    scroll.scroll_value_v120(input::event::pointer::Axis::Vertical) / 120.0 * 15.0;
                 self.frame.pointer.accumulate_scroll(h, v);
             }
             PointerEvent::ScrollFinger(scroll) => {
@@ -290,14 +295,14 @@ impl InputHandler {
 
     fn handle_keyboard_key_batched(&mut self, key: u32, state: input::event::keyboard::KeyState) {
         use input::event::keyboard::KeyState;
-        
+
         if self.xkb_state.is_none() {
             self.init_xkb_state();
         }
-        
+
         if let Some(ref mut xkb_state) = self.xkb_state {
             let keycode = key + 8;
-            
+
             xkb_state.update_key(
                 xkb::Keycode::from(keycode),
                 match state {
@@ -305,28 +310,20 @@ impl InputHandler {
                     KeyState::Released => xkb::KeyDirection::Up,
                 },
             );
-            
-            self.ctrl = xkb_state.mod_name_is_active(
-                xkb::MOD_NAME_CTRL,
-                xkb::STATE_MODS_EFFECTIVE,
-            );
-            self.alt = xkb_state.mod_name_is_active(
-                xkb::MOD_NAME_ALT,
-                xkb::STATE_MODS_EFFECTIVE,
-            );
-            self.shift = xkb_state.mod_name_is_active(
-                xkb::MOD_NAME_SHIFT,
-                xkb::STATE_MODS_EFFECTIVE,
-            );
-            self.super_key = xkb_state.mod_name_is_active(
-                xkb::MOD_NAME_LOGO,
-                xkb::STATE_MODS_EFFECTIVE,
-            );
-            
+
+            self.ctrl = xkb_state.mod_name_is_active(xkb::MOD_NAME_CTRL, xkb::STATE_MODS_EFFECTIVE);
+            self.alt = xkb_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
+            self.shift =
+                xkb_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
+            self.super_key =
+                xkb_state.mod_name_is_active(xkb::MOD_NAME_LOGO, xkb::STATE_MODS_EFFECTIVE);
+
             if state == KeyState::Pressed {
-                let keysym: u32 = xkb_state.key_get_one_sym(xkb::Keycode::from(keycode)).into();
+                let keysym: u32 = xkb_state
+                    .key_get_one_sym(xkb::Keycode::from(keycode))
+                    .into();
                 let keysym_lower = keysym_to_lower(keysym);
-                
+
                 let current_keybind = Keybind {
                     ctrl: self.ctrl,
                     alt: self.alt,
@@ -334,13 +331,13 @@ impl InputHandler {
                     super_key: self.super_key,
                     keysym: keysym_lower,
                 };
-                
+
                 if let Some(action) = self.keybinds.get(&current_keybind) {
                     self.frame.actions.push(action.clone());
                     return;
                 }
             }
-            
+
             self.frame.keys.push(KeyEvent {
                 keycode: keycode - 8,
                 state,
@@ -353,7 +350,7 @@ impl InputHandler {
             log::error!("XKB state unavailable, key event dropped");
         }
     }
-    
+
     fn init_xkb_state(&mut self) {
         let keymap = xkb::Keymap::new_from_names(
             &self.xkb_context,
@@ -364,12 +361,12 @@ impl InputHandler {
             None,
             xkb::KEYMAP_COMPILE_NO_FLAGS,
         );
-        
+
         if let Some(keymap) = keymap {
             self.xkb_state = Some(xkb::State::new(&keymap));
         }
     }
-    
+
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.libinput.as_fd()
     }
@@ -380,7 +377,7 @@ fn keysym_to_lower(keysym: u32) -> u32 {
     if (KEY_A..=KEY_Z).contains(&keysym) {
         return keysym + (KEY_a - KEY_A);
     }
-    
+
     #[allow(non_upper_case_globals)]
     match keysym {
         KEY_exclam => KEY_1,

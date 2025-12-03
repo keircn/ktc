@@ -15,13 +15,9 @@ pub enum IpcEvent {
         active_workspace: usize,
     },
     #[serde(rename = "focus")]
-    FocusChanged {
-        window_title: Option<String>,
-    },
+    FocusChanged { window_title: Option<String> },
     #[serde(rename = "title")]
-    TitleChanged {
-        window_title: String,
-    },
+    TitleChanged { window_title: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

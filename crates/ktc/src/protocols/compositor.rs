@@ -1,11 +1,11 @@
-use wayland_server::{GlobalDispatch, Dispatch, Resource};
-use wayland_server::protocol::{
-    wl_compositor::{self, WlCompositor},
-    wl_surface::{self, WlSurface},
-    wl_callback::WlCallback,
-    wl_region::{self, WlRegion},
-};
 use crate::state::State;
+use wayland_server::protocol::{
+    wl_callback::WlCallback,
+    wl_compositor::{self, WlCompositor},
+    wl_region::{self, WlRegion},
+    wl_surface::{self, WlSurface},
+};
+use wayland_server::{Dispatch, GlobalDispatch, Resource};
 
 impl GlobalDispatch<WlCompositor, ()> for State {
     fn bind(
@@ -55,7 +55,11 @@ impl Dispatch<WlSurface, ()> for State {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 if let Some(ref buf) = buffer {
-                    log::debug!("[surface] Attach buffer {:?} to surface {:?}", buf.id(), resource.id());
+                    log::debug!(
+                        "[surface] Attach buffer {:?} to surface {:?}",
+                        buf.id(),
+                        resource.id()
+                    );
                 }
                 if let Some(window) = state.get_window_by_surface(resource) {
                     window.pending_buffer = buffer;
@@ -67,7 +71,7 @@ impl Dispatch<WlSurface, ()> for State {
             }
             wl_surface::Request::Commit => {
                 let surface_id = resource.id();
-                
+
                 if let Some(window) = state.get_window_by_surface(resource) {
                     if window.pending_buffer_set {
                         window.buffer = window.pending_buffer.take();
@@ -76,17 +80,23 @@ impl Dispatch<WlSurface, ()> for State {
                     }
                     window.mapped = window.buffer.is_some();
                     state.mark_surface_damage(surface_id.clone());
-                } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
+                } else if state
+                    .layer_surfaces
+                    .iter()
+                    .any(|ls| ls.wl_surface.id() == surface_id)
+                {
                     let (needs_configure, needs_map, needs_keyboard_focus) = {
-                        let ls = state.layer_surfaces.iter_mut()
+                        let ls = state
+                            .layer_surfaces
+                            .iter_mut()
                             .find(|ls| ls.wl_surface.id() == surface_id);
                         if let Some(ls) = ls {
-                            let size_changed = ls.configured && (
-                                ls.geometry.width != ls.desired_width as i32 ||
-                                ls.geometry.height != ls.desired_height as i32
-                            );
-                            let needs_cfg = !ls.configured || (size_changed && ls.desired_width > 0 && ls.desired_height > 0);
-                            
+                            let size_changed = ls.configured
+                                && (ls.geometry.width != ls.desired_width as i32
+                                    || ls.geometry.height != ls.desired_height as i32);
+                            let needs_cfg = !ls.configured
+                                || (size_changed && ls.desired_width > 0 && ls.desired_height > 0);
+
                             if ls.pending_buffer_set {
                                 ls.buffer = ls.pending_buffer.take();
                                 ls.pending_buffer_set = false;
@@ -95,29 +105,30 @@ impl Dispatch<WlSurface, ()> for State {
                             let was_mapped = ls.mapped;
                             ls.mapped = ls.buffer.is_some();
                             ls.needs_redraw = true;
-                            
+
                             use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::KeyboardInteractivity;
-                            let needs_kb = !was_mapped && ls.mapped && 
-                                ls.keyboard_interactivity == KeyboardInteractivity::Exclusive;
-                            
+                            let needs_kb = !was_mapped
+                                && ls.mapped
+                                && ls.keyboard_interactivity == KeyboardInteractivity::Exclusive;
+
                             (needs_cfg, !was_mapped && ls.mapped, needs_kb)
                         } else {
                             (false, false, false)
                         }
                     };
-                    
+
                     if needs_configure {
                         state.configure_layer_surface(surface_id.clone());
                     }
-                    
+
                     if needs_map {
                         state.damage_tracker.mark_full_damage();
                     }
-                    
+
                     if needs_keyboard_focus {
                         state.focus_layer_surface(surface_id.clone());
                     }
-                    
+
                     state.mark_layer_surface_damage(surface_id);
                 }
             }
@@ -125,7 +136,12 @@ impl Dispatch<WlSurface, ()> for State {
                 let cb = data_init.init(callback, ());
                 state.frame_callbacks.push(cb);
             }
-            wl_surface::Request::Damage { x, y, width, height } => {
+            wl_surface::Request::Damage {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 let title_bar_height = state.title_bar_height();
                 let damage_info = state.get_window_by_surface(resource).map(|window| {
                     window.needs_redraw = true;
@@ -151,7 +167,12 @@ impl Dispatch<WlSurface, ()> for State {
                     state.damage_tracker.add_damage(rect);
                 }
             }
-            wl_surface::Request::DamageBuffer { x, y, width, height } => {
+            wl_surface::Request::DamageBuffer {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 let title_bar_height = state.title_bar_height();
                 let damage_info = state.get_window_by_surface(resource).map(|window| {
                     window.needs_redraw = true;
@@ -180,13 +201,24 @@ impl Dispatch<WlSurface, ()> for State {
             wl_surface::Request::Destroy => {
                 let surface_id = resource.id();
                 log::info!("[surface] Destroy request for surface {:?}", surface_id);
-                if let Some(pos) = state.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
+                if let Some(pos) = state
+                    .windows
+                    .iter()
+                    .position(|w| w.wl_surface.id() == surface_id)
+                {
                     let window_id = state.windows[pos].id;
                     log::info!("[surface] Found window {} for surface, removing", window_id);
                     state.remove_window(window_id);
                     state.relayout_windows();
-                } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
-                    log::info!("[surface] Found layer surface for surface {:?}, removing", surface_id);
+                } else if state
+                    .layer_surfaces
+                    .iter()
+                    .any(|ls| ls.wl_surface.id() == surface_id)
+                {
+                    log::info!(
+                        "[surface] Found layer surface for surface {:?}, removing",
+                        surface_id
+                    );
                     state.remove_layer_surface_by_surface(resource);
                 } else {
                     log::debug!("[surface] No window found for surface {:?}", surface_id);
@@ -195,7 +227,7 @@ impl Dispatch<WlSurface, ()> for State {
             _ => {}
         }
     }
-    
+
     fn destroyed(
         state: &mut Self,
         _client: wayland_server::backend::ClientId,
@@ -203,14 +235,31 @@ impl Dispatch<WlSurface, ()> for State {
         _data: &(),
     ) {
         let surface_id = resource.id();
-        log::info!("[surface] Surface {:?} destroyed (client disconnected or resource dropped)", surface_id);
-        if let Some(pos) = state.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
+        log::info!(
+            "[surface] Surface {:?} destroyed (client disconnected or resource dropped)",
+            surface_id
+        );
+        if let Some(pos) = state
+            .windows
+            .iter()
+            .position(|w| w.wl_surface.id() == surface_id)
+        {
             let window_id = state.windows[pos].id;
-            log::info!("[surface] Found window {} for destroyed surface, removing", window_id);
+            log::info!(
+                "[surface] Found window {} for destroyed surface, removing",
+                window_id
+            );
             state.remove_window(window_id);
             state.relayout_windows();
-        } else if state.layer_surfaces.iter().any(|ls| ls.wl_surface.id() == surface_id) {
-            log::info!("[surface] Found layer surface for destroyed surface {:?}, removing", surface_id);
+        } else if state
+            .layer_surfaces
+            .iter()
+            .any(|ls| ls.wl_surface.id() == surface_id)
+        {
+            log::info!(
+                "[surface] Found layer surface for destroyed surface {:?}, removing",
+                surface_id
+            );
             state.remove_layer_surface_by_surface(resource);
         }
     }
@@ -225,7 +274,8 @@ impl Dispatch<WlCallback, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<WlRegion, ()> for State {
@@ -237,5 +287,6 @@ impl Dispatch<WlRegion, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }

@@ -1,10 +1,10 @@
-use wayland_server::{Dispatch, GlobalDispatch, Resource, WEnum};
+use crate::state::{Layer, LayerSurface, Rectangle, State};
 use wayland_protocols_wlr::layer_shell::v1::server::{
-    zwlr_layer_shell_v1::{self, ZwlrLayerShellV1, Layer as WlrLayer},
-    zwlr_layer_surface_v1::{self, Anchor, ZwlrLayerSurfaceV1, KeyboardInteractivity},
+    zwlr_layer_shell_v1::{self, Layer as WlrLayer, ZwlrLayerShellV1},
+    zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
 use wayland_server::protocol::wl_surface::WlSurface;
-use crate::state::{State, Rectangle, LayerSurface, Layer};
+use wayland_server::{Dispatch, GlobalDispatch, Resource, WEnum};
 
 pub struct LayerShellGlobal;
 
@@ -144,29 +144,57 @@ impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for State {
 
         match request {
             zwlr_layer_surface_v1::Request::SetSize { width, height } => {
-                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+                if let Some(ls) = state
+                    .layer_surfaces
+                    .iter_mut()
+                    .find(|ls| ls.wl_surface.id() == surface_id)
+                {
                     ls.desired_width = width;
                     ls.desired_height = height;
                 }
             }
             zwlr_layer_surface_v1::Request::SetAnchor { anchor } => {
-                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+                if let Some(ls) = state
+                    .layer_surfaces
+                    .iter_mut()
+                    .find(|ls| ls.wl_surface.id() == surface_id)
+                {
                     ls.anchor = convert_anchor(anchor);
                 }
             }
             zwlr_layer_surface_v1::Request::SetExclusiveZone { zone } => {
-                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+                if let Some(ls) = state
+                    .layer_surfaces
+                    .iter_mut()
+                    .find(|ls| ls.wl_surface.id() == surface_id)
+                {
                     ls.exclusive_zone = zone;
                 }
             }
-            zwlr_layer_surface_v1::Request::SetMargin { top, right, bottom, left } => {
-                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+            zwlr_layer_surface_v1::Request::SetMargin {
+                top,
+                right,
+                bottom,
+                left,
+            } => {
+                if let Some(ls) = state
+                    .layer_surfaces
+                    .iter_mut()
+                    .find(|ls| ls.wl_surface.id() == surface_id)
+                {
                     ls.margin = (top, right, bottom, left);
                 }
             }
-            zwlr_layer_surface_v1::Request::SetKeyboardInteractivity { keyboard_interactivity } => {
-                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
-                    ls.keyboard_interactivity = convert_keyboard_interactivity(keyboard_interactivity);
+            zwlr_layer_surface_v1::Request::SetKeyboardInteractivity {
+                keyboard_interactivity,
+            } => {
+                if let Some(ls) = state
+                    .layer_surfaces
+                    .iter_mut()
+                    .find(|ls| ls.wl_surface.id() == surface_id)
+                {
+                    ls.keyboard_interactivity =
+                        convert_keyboard_interactivity(keyboard_interactivity);
                 }
             }
             zwlr_layer_surface_v1::Request::GetPopup { popup: _ } => {}
@@ -176,7 +204,11 @@ impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for State {
             }
             zwlr_layer_surface_v1::Request::SetLayer { layer } => {
                 let layer_value = convert_layer(layer);
-                if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+                if let Some(ls) = state
+                    .layer_surfaces
+                    .iter_mut()
+                    .find(|ls| ls.wl_surface.id() == surface_id)
+                {
                     ls.layer = layer_value;
                 }
             }
@@ -199,11 +231,21 @@ impl State {
         let (screen_width, screen_height) = self.screen_size();
 
         let (anchor, margin, desired_width, desired_height, layer_surface) = {
-            let ls = match self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+            let ls = match self
+                .layer_surfaces
+                .iter_mut()
+                .find(|ls| ls.wl_surface.id() == surface_id)
+            {
                 Some(ls) => ls,
                 None => return,
             };
-            (ls.anchor, ls.margin, ls.desired_width, ls.desired_height, ls.layer_surface.clone())
+            (
+                ls.anchor,
+                ls.margin,
+                ls.desired_width,
+                ls.desired_height,
+                ls.layer_surface.clone(),
+            )
         };
 
         let anchored_left = anchor.contains(Anchor::Left);
@@ -214,7 +256,7 @@ impl State {
         // i stole this from hyprland's implementation :3
         let mut width = desired_width as i32;
         let mut height = desired_height as i32;
-        
+
         let x = if width == 0 {
             margin.3
         } else if anchored_left && anchored_right {
@@ -226,7 +268,7 @@ impl State {
         } else {
             (screen_width - width) / 2
         };
-        
+
         let y = if height == 0 {
             margin.0
         } else if anchored_top && anchored_bottom {
@@ -238,17 +280,26 @@ impl State {
         } else {
             (screen_height - height) / 2
         };
-        
+
         if width == 0 {
             width = screen_width - margin.3 - margin.1;
         }
-        
+
         if height == 0 {
             height = screen_height - margin.0 - margin.2;
         }
 
-        if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
-            ls.geometry = Rectangle { x, y, width, height };
+        if let Some(ls) = self
+            .layer_surfaces
+            .iter_mut()
+            .find(|ls| ls.wl_surface.id() == surface_id)
+        {
+            ls.geometry = Rectangle {
+                x,
+                y,
+                width,
+                height,
+            };
             ls.configured = true;
         }
 
@@ -257,15 +308,26 @@ impl State {
 
         log::debug!(
             "[layer_shell] Configured surface: {}x{} at ({}, {})",
-            width, height, x, y
+            width,
+            height,
+            x,
+            y
         );
     }
 
     pub fn remove_layer_surface_by_surface(&mut self, surface: &WlSurface) {
         let surface_id = surface.id();
-        if let Some(pos) = self.layer_surfaces.iter().position(|ls| ls.wl_surface.id() == surface_id) {
+        if let Some(pos) = self
+            .layer_surfaces
+            .iter()
+            .position(|ls| ls.wl_surface.id() == surface_id)
+        {
             let ls = &self.layer_surfaces[pos];
-            log::debug!("[layer_shell] Removing layer surface {} (namespace: {})", ls.id, ls.namespace);
+            log::debug!(
+                "[layer_shell] Removing layer surface {} (namespace: {})",
+                ls.id,
+                ls.namespace
+            );
             ls.layer_surface.closed();
             self.damage_tracker.add_damage(ls.geometry);
             self.layer_surfaces.swap_remove(pos);
@@ -273,14 +335,23 @@ impl State {
         }
     }
 
-    pub fn get_layer_surface_by_wl_surface(&mut self, surface: &WlSurface) -> Option<&mut LayerSurface> {
+    pub fn get_layer_surface_by_wl_surface(
+        &mut self,
+        surface: &WlSurface,
+    ) -> Option<&mut LayerSurface> {
         let surface_id = surface.id();
-        self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id)
+        self.layer_surfaces
+            .iter_mut()
+            .find(|ls| ls.wl_surface.id() == surface_id)
     }
 
     #[allow(dead_code)]
     pub fn map_layer_surface(&mut self, surface_id: wayland_server::backend::ObjectId) {
-        if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+        if let Some(ls) = self
+            .layer_surfaces
+            .iter_mut()
+            .find(|ls| ls.wl_surface.id() == surface_id)
+        {
             if !ls.mapped {
                 ls.mapped = true;
                 self.damage_tracker.mark_full_damage();
@@ -291,6 +362,8 @@ impl State {
 
     #[allow(dead_code)]
     pub fn layer_surfaces_by_layer(&self, layer: Layer) -> impl Iterator<Item = &LayerSurface> {
-        self.layer_surfaces.iter().filter(move |ls| ls.layer == layer && ls.mapped)
+        self.layer_surfaces
+            .iter()
+            .filter(move |ls| ls.layer == layer && ls.mapped)
     }
 }

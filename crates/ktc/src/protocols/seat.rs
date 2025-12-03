@@ -1,12 +1,12 @@
-use wayland_server::{GlobalDispatch, Dispatch, Resource};
-use wayland_server::protocol::{
-    wl_seat::{self, WlSeat},
-    wl_pointer::{self, WlPointer},
-    wl_keyboard::{self, WlKeyboard, KeymapFormat},
-    wl_touch::{self, WlTouch},
-};
 use crate::state::State;
 use std::os::fd::AsFd;
+use wayland_server::protocol::{
+    wl_keyboard::{self, KeymapFormat, WlKeyboard},
+    wl_pointer::{self, WlPointer},
+    wl_seat::{self, WlSeat},
+    wl_touch::{self, WlTouch},
+};
+use wayland_server::{Dispatch, GlobalDispatch, Resource};
 
 impl GlobalDispatch<WlSeat, ()> for State {
     fn bind(
@@ -42,29 +42,35 @@ impl Dispatch<WlSeat, ()> for State {
             }
             wl_seat::Request::GetKeyboard { id } => {
                 let keyboard = data_init.init(id, ());
-                
+
                 if let Some(ref keymap_data) = state.keymap_data {
-                    keyboard.keymap(KeymapFormat::XkbV1, keymap_data.fd.as_fd(), keymap_data.size);
+                    keyboard.keymap(
+                        KeymapFormat::XkbV1,
+                        keymap_data.fd.as_fd(),
+                        keymap_data.size,
+                    );
                 }
-                
+
                 if keyboard.version() >= 4 {
                     keyboard.repeat_info(25, 600);
                 }
-                
+
                 let enter_info = state.focused_window.and_then(|focused_id| {
-                    state.windows.iter()
+                    state
+                        .windows
+                        .iter()
                         .find(|w| w.id == focused_id)
                         .filter(|w| w.wl_surface.client() == keyboard.client())
                         .map(|w| (focused_id, w.wl_surface.clone()))
                 });
-                
+
                 if let Some((focused_id, surface)) = enter_info {
                     let serial = state.next_keyboard_serial();
                     keyboard.enter(serial, &surface, vec![]);
                     state.keyboard_to_window.insert(keyboard.id(), focused_id);
                     log::info!("[seat] Sent keyboard.enter to newly created keyboard for focused window {}", focused_id);
                 }
-                
+
                 state.keyboards.push(keyboard);
             }
             wl_seat::Request::GetTouch { id } => {
@@ -84,8 +90,9 @@ impl Dispatch<WlPointer, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
-    
+    ) {
+    }
+
     fn destroyed(
         state: &mut Self,
         _client: wayland_server::backend::ClientId,
@@ -95,7 +102,11 @@ impl Dispatch<WlPointer, ()> for State {
         let pointer_id = resource.id();
         if let Some(pos) = state.pointers.iter().position(|p| p.id() == pointer_id) {
             state.pointers.swap_remove(pos);
-            log::info!("[seat] Pointer {:?} destroyed, {} pointers remaining", pointer_id, state.pointers.len());
+            log::info!(
+                "[seat] Pointer {:?} destroyed, {} pointers remaining",
+                pointer_id,
+                state.pointers.len()
+            );
         }
     }
 }
@@ -109,8 +120,9 @@ impl Dispatch<WlKeyboard, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
-    
+    ) {
+    }
+
     fn destroyed(
         state: &mut Self,
         _client: wayland_server::backend::ClientId,
@@ -121,7 +133,11 @@ impl Dispatch<WlKeyboard, ()> for State {
         state.keyboard_to_window.remove(&keyboard_id);
         if let Some(pos) = state.keyboards.iter().position(|k| k.id() == keyboard_id) {
             state.keyboards.swap_remove(pos);
-            log::info!("[seat] Keyboard {:?} destroyed, {} keyboards remaining", keyboard_id, state.keyboards.len());
+            log::info!(
+                "[seat] Keyboard {:?} destroyed, {} keyboards remaining",
+                keyboard_id,
+                state.keyboards.len()
+            );
         }
     }
 }
@@ -135,5 +151,6 @@ impl Dispatch<WlTouch, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }

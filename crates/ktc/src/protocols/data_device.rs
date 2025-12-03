@@ -1,11 +1,11 @@
-use wayland_server::{GlobalDispatch, Dispatch};
-use wayland_server::protocol::{
-    wl_data_device_manager::{self, WlDataDeviceManager},
-    wl_data_device::{self, WlDataDevice},
-    wl_data_source::{self, WlDataSource},
-    wl_data_offer::{self, WlDataOffer},
-};
 use crate::state::State;
+use wayland_server::protocol::{
+    wl_data_device::{self, WlDataDevice},
+    wl_data_device_manager::{self, WlDataDeviceManager},
+    wl_data_offer::{self, WlDataOffer},
+    wl_data_source::{self, WlDataSource},
+};
+use wayland_server::{Dispatch, GlobalDispatch};
 
 impl GlobalDispatch<WlDataDeviceManager, ()> for State {
     fn bind(
@@ -51,7 +51,8 @@ impl Dispatch<WlDataDevice, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<WlDataSource, ()> for State {
@@ -63,7 +64,8 @@ impl Dispatch<WlDataSource, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<WlDataOffer, ()> for State {
@@ -75,5 +77,6 @@ impl Dispatch<WlDataOffer, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }

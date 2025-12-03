@@ -1,37 +1,33 @@
-mod state;
-mod protocols;
+mod config;
 mod input;
 mod ipc;
 mod logging;
-mod session;
-mod config;
+mod protocols;
 mod renderer;
+mod session;
+mod state;
 
 use config::Config;
 use input::KeyState;
-use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
-use wayland_server::{Display, ListeningSocket, Resource};
-use wayland_server::protocol::{
-    wl_compositor::WlCompositor,
-    wl_seat::WlSeat,
-    wl_output::WlOutput,
-    wl_shm::WlShm,
-    wl_data_device_manager::WlDataDeviceManager,
-    wl_subcompositor::WlSubcompositor,
-};
-use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
-use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
-use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
-use wayland_protocols_wlr::output_management::v1::server::zwlr_output_manager_v1::ZwlrOutputManagerV1;
-use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_shell_v1::ZwlrLayerShellV1;
+use protocols::dmabuf::DmaBufGlobal;
+use protocols::layer_shell::LayerShellGlobal;
+use protocols::output_management::OutputManagerGlobal;
+use protocols::xdg_decoration::XdgDecorationGlobal;
+use state::State;
+use std::sync::Arc;
 use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
-use std::sync::Arc;
-use state::State;
-use protocols::dmabuf::DmaBufGlobal;
-use protocols::xdg_decoration::XdgDecorationGlobal;
-use protocols::output_management::OutputManagerGlobal;
-use protocols::layer_shell::LayerShellGlobal;
+use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
+use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1;
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_shell_v1::ZwlrLayerShellV1;
+use wayland_protocols_wlr::output_management::v1::server::zwlr_output_manager_v1::ZwlrOutputManagerV1;
+use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
+use wayland_server::protocol::wl_keyboard::KeyState as WlKeyState;
+use wayland_server::protocol::{
+    wl_compositor::WlCompositor, wl_data_device_manager::WlDataDeviceManager, wl_output::WlOutput,
+    wl_seat::WlSeat, wl_shm::WlShm, wl_subcompositor::WlSubcompositor,
+};
+use wayland_server::{Display, ListeningSocket, Resource};
 
 fn main() {
     if unsafe { libc::geteuid() } == 0 {
@@ -41,12 +37,11 @@ fn main() {
         eprintln!("Then log out and back in.");
         std::process::exit(1);
     }
-    
+
     logging::FileLogger::init().expect("Failed to initialize logging");
-    
+
     let config = Config::load();
 
-    
     log::info!("Starting KTC compositor");
     run(config);
 }
@@ -54,7 +49,7 @@ fn main() {
 fn setup_wayland(has_gpu: bool) -> (Display<State>, ListeningSocket) {
     let display = Display::<State>::new().expect("Failed to create display");
     let dh = display.handle();
-    
+
     dh.create_global::<State, WlCompositor, _>(6, ());
     dh.create_global::<State, WlSubcompositor, _>(1, ());
     dh.create_global::<State, XdgWmBase, _>(5, ());
@@ -67,24 +62,26 @@ fn setup_wayland(has_gpu: bool) -> (Display<State>, ListeningSocket) {
     dh.create_global::<State, ZwlrOutputManagerV1, _>(4, OutputManagerGlobal);
     dh.create_global::<State, ZwlrLayerShellV1, _>(4, LayerShellGlobal);
     dh.create_global::<State, ZxdgDecorationManagerV1, _>(1, XdgDecorationGlobal);
-    
+
     if has_gpu {
         dh.create_global::<State, ZwpLinuxDmabufV1, _>(4, DmaBufGlobal);
         log::info!("DMA-BUF protocol enabled (GPU acceleration available)");
     }
 
-    let socket = ListeningSocket::bind_auto("wayland", 0..32)
-        .expect("Failed to create socket");
-    
-    log::info!("Listening on: {}", socket.socket_name().unwrap().to_string_lossy());
-    
+    let socket = ListeningSocket::bind_auto("wayland", 0..32).expect("Failed to create socket");
+
+    log::info!(
+        "Listening on: {}",
+        socket.socket_name().unwrap().to_string_lossy()
+    );
+
     (display, socket)
 }
 
 fn run(config: Config) {
-    use std::fs::OpenOptions;
     use input::InputHandler;
-    
+    use std::fs::OpenOptions;
+
     let _session = match session::Session::new() {
         Ok(s) => {
             log::info!("Session initialized on VT{}", s.vt_num());
@@ -96,22 +93,24 @@ fn run(config: Config) {
             None
         }
     };
-    
+
     let drm_device = if let Some(path) = config.display.drm_device_path() {
         log::info!("Using configured DRM device: {}", path);
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
+        OpenOptions::new().read(true).write(true).open(&path)
     } else {
         log::info!("Auto-detecting DRM device");
         OpenOptions::new()
             .read(true)
             .write(true)
             .open("/dev/dri/card0")
-            .or_else(|_| OpenOptions::new().read(true).write(true).open("/dev/dri/card1"))
+            .or_else(|_| {
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open("/dev/dri/card1")
+            })
     };
-    
+
     let preferred_mode = config.display.parse_mode();
     let vsync_enabled = config.display.vsync;
     let gpu_enabled = config.display.gpu;
@@ -119,7 +118,7 @@ fn run(config: Config) {
     let (gpu_renderer, drm_info) = match drm_device {
         Ok(device) => {
             log::info!("Opened DRM device");
-            
+
             if gpu_enabled {
                 log::info!("Using OpenGL renderer");
                 match renderer::GpuRenderer::new_with_config(
@@ -172,14 +171,15 @@ fn run(config: Config) {
 
     let has_gpu = gpu_renderer.is_some();
     let (mut display, socket) = setup_wayland(has_gpu);
-    
-    let socket_name = socket.socket_name()
+
+    let socket_name = socket
+        .socket_name()
         .expect("Failed to get socket name")
         .to_string_lossy()
         .to_string();
 
     let keybinds = config.keybinds.get_all_bindings();
-    
+
     for (action, _) in &keybinds {
         log::debug!("[keybind] Registered action: {:?}", action);
     }
@@ -197,20 +197,19 @@ fn run(config: Config) {
         }
     };
 
-    let mut calloop_loop = calloop::EventLoop::<LoopData>::try_new()
-        .expect("Failed to create calloop event loop");
+    let mut calloop_loop =
+        calloop::EventLoop::<LoopData>::try_new().expect("Failed to create calloop event loop");
 
-    let poll_fd = display.backend().poll_fd().try_clone_to_owned()
+    let poll_fd = display
+        .backend()
+        .poll_fd()
+        .try_clone_to_owned()
         .expect("Failed to clone poll fd");
-    
+
     calloop_loop
         .handle()
         .insert_source(
-            calloop::generic::Generic::new(
-                &socket,
-                calloop::Interest::READ,
-                calloop::Mode::Level,
-            ),
+            calloop::generic::Generic::new(&socket, calloop::Interest::READ, calloop::Mode::Level),
             |_, socket, data| {
                 if let Some(stream) = socket.accept().ok().flatten() {
                     log::info!("New client connecting to Wayland socket");
@@ -231,11 +230,7 @@ fn run(config: Config) {
     calloop_loop
         .handle()
         .insert_source(
-            calloop::generic::Generic::new(
-                poll_fd,
-                calloop::Interest::READ,
-                calloop::Mode::Level,
-            ),
+            calloop::generic::Generic::new(poll_fd, calloop::Interest::READ, calloop::Mode::Level),
             |_, _, data| {
                 data.display.dispatch_clients(&mut data.state).ok();
                 data.display.flush_clients().ok();
@@ -245,9 +240,11 @@ fn run(config: Config) {
         .expect("Failed to insert display source");
 
     if let Some(ref handler) = input_handler {
-        let input_fd = handler.as_fd().try_clone_to_owned()
+        let input_fd = handler
+            .as_fd()
+            .try_clone_to_owned()
             .expect("Failed to clone input fd");
-        
+
         calloop_loop
             .handle()
             .insert_source(
@@ -265,9 +262,11 @@ fn run(config: Config) {
     }
 
     if let Some(ref gpu) = gpu_renderer {
-        let drm_fd = gpu.drm_fd().try_clone_to_owned()
+        let drm_fd = gpu
+            .drm_fd()
+            .try_clone_to_owned()
             .expect("Failed to clone DRM fd");
-        
+
         calloop_loop
             .handle()
             .insert_source(
@@ -284,60 +283,73 @@ fn run(config: Config) {
             .expect("Failed to insert DRM source");
     }
 
-    let _timer = calloop_loop.handle()
+    let _timer = calloop_loop
+        .handle()
         .insert_source(
             calloop::timer::Timer::immediate(),
             |_deadline, _: &mut (), data| {
                 let frame_start = std::time::Instant::now();
-                
+
                 let input_start = std::time::Instant::now();
                 if data.input_pending {
                     data.input_pending = false;
                     process_input(data);
                 }
                 let input_time = input_start.elapsed().as_micros() as u64;
-                
+
                 if data.ipc_pending {
                     data.ipc_pending = false;
                     process_ipc(data);
                 }
-                
+
                 if let Some(title) = data.state.pending_title_change.take() {
                     if let Some(ref mut ipc) = data.ipc_server {
                         ipc.notify_title_change(title);
                     }
                 }
-                
+
                 if data.vsync_pending {
                     data.vsync_pending = false;
                     if let Some(ref mut gpu) = data.state.gpu_renderer {
                         gpu.handle_drm_event();
                     }
                 }
-                
+
                 data.display.dispatch_clients(&mut data.state).ok();
-                
+
                 if data.state.cleanup_dead_windows() {
                     data.display.flush_clients().ok();
                 }
-                
+
                 let profiler_stats = data.frame_profiler.get_stats(&data.state);
                 let show_profiler = data.state.config.debug.profiler;
-                
-                let can_render = data.state.gpu_renderer.as_ref()
+
+                let can_render = data
+                    .state
+                    .gpu_renderer
+                    .as_ref()
                     .map(|gpu| !gpu.is_flip_pending())
                     .unwrap_or(true);
-                
+
                 let render_start = std::time::Instant::now();
                 if can_render {
-                    render(&mut data.state, &mut data.display, data.drm_info.as_mut(), 
-                           if show_profiler { Some(&profiler_stats) } else { None });
+                    render(
+                        &mut data.state,
+                        &mut data.display,
+                        data.drm_info.as_mut(),
+                        if show_profiler {
+                            Some(&profiler_stats)
+                        } else {
+                            None
+                        },
+                    );
                 }
                 let render_time = render_start.elapsed().as_micros() as u64;
-                
+
                 let total_time = frame_start.elapsed().as_micros() as u64;
-                data.frame_profiler.record_frame(input_time, render_time, total_time, &data.state);
-                
+                data.frame_profiler
+                    .record_frame(input_time, render_time, total_time, &data.state);
+
                 let timeout = if data.state.gpu_renderer.is_some() {
                     std::time::Duration::from_millis(1)
                 } else {
@@ -350,9 +362,11 @@ fn run(config: Config) {
 
     let ipc_server = match ipc::IpcServer::new() {
         Ok(server) => {
-            let ipc_fd = server.fd().try_clone_to_owned()
+            let ipc_fd = server
+                .fd()
+                .try_clone_to_owned()
                 .expect("Failed to clone IPC fd");
-            
+
             calloop_loop
                 .handle()
                 .insert_source(
@@ -367,7 +381,7 @@ fn run(config: Config) {
                     },
                 )
                 .expect("Failed to insert IPC source");
-            
+
             Some(server)
         }
         Err(e) => {
@@ -388,100 +402,121 @@ fn run(config: Config) {
         ipc_pending: false,
         frame_profiler: FrameProfiler::new(),
     };
-    
+
     loop_data.state.gpu_renderer = gpu_renderer;
-    
+
     if let Some(ref gpu) = loop_data.state.gpu_renderer {
         let (w, h) = gpu.size();
         let (phys_w, phys_h) = gpu.physical_size();
         use state::OutputConfig;
-        let output_id = loop_data.state.add_output("GPU".to_string(), w as i32, h as i32);
-        
+        let output_id = loop_data
+            .state
+            .add_output("GPU".to_string(), w as i32, h as i32);
+
         let physical_size = if phys_w > 0 && phys_h > 0 {
             Some((phys_w as i32, phys_h as i32))
         } else {
             None
         };
-        
-        loop_data.state.configure_output(output_id, OutputConfig {
-            make: Some("GPU".to_string()),
-            model: Some("OpenGL".to_string()),
-            physical_size,
-            ..Default::default()
-        });
-        log::info!("Configured GPU output at {}x{} (physical: {}x{}mm)", w, h, phys_w, phys_h);
+
+        loop_data.state.configure_output(
+            output_id,
+            OutputConfig {
+                make: Some("GPU".to_string()),
+                model: Some("OpenGL".to_string()),
+                physical_size,
+                ..Default::default()
+            },
+        );
+        log::info!(
+            "Configured GPU output at {}x{} (physical: {}x{}mm)",
+            w,
+            h,
+            phys_w,
+            phys_h
+        );
     } else if let Some(ref drm) = loop_data.drm_info {
         use state::OutputConfig;
-        let output_id = loop_data.state.add_output(
-            drm.name.clone(),
-            drm.width as i32,
-            drm.height as i32
+        let output_id =
+            loop_data
+                .state
+                .add_output(drm.name.clone(), drm.width as i32, drm.height as i32);
+
+        loop_data.state.configure_output(
+            output_id,
+            OutputConfig {
+                make: Some("DRM".to_string()),
+                model: Some(drm.name.clone()),
+                physical_size: Some((drm.physical_width as i32, drm.physical_height as i32)),
+                refresh: Some(drm.refresh),
+                ..Default::default()
+            },
         );
-        
-        loop_data.state.configure_output(output_id, OutputConfig {
-            make: Some("DRM".to_string()),
-            model: Some(drm.name.clone()),
-            physical_size: Some((drm.physical_width as i32, drm.physical_height as i32)),
-            refresh: Some(drm.refresh),
-            ..Default::default()
-        });
-        
-        log::info!("Configured output {} at {}x{}", drm.name, drm.width, drm.height);
+
+        log::info!(
+            "Configured output {} at {}x{}",
+            drm.name,
+            drm.width,
+            drm.height
+        );
     } else {
-        loop_data.state.add_output("headless".to_string(), 1366, 768);
+        loop_data
+            .state
+            .add_output("headless".to_string(), 1366, 768);
     }
 
     log::info!("Compositor running. Press Ctrl+Alt+Q to exit.");
-    
+
     spawn_ktcbar(&loop_data.socket_name);
-    
+
     while session::is_running() {
-        calloop_loop.dispatch(Some(std::time::Duration::from_millis(16)), &mut loop_data)
+        calloop_loop
+            .dispatch(Some(std::time::Duration::from_millis(16)), &mut loop_data)
             .expect("Event loop error");
     }
-    
+
     log::info!("Main loop exited, cleaning up...");
 }
 
 fn process_input(data: &mut LoopData) {
     use crate::config::{Action, Direction, ToggleState};
-    
+
     let handler = match data.input_handler.as_mut() {
         Some(h) => h,
         None => return,
     };
-    
+
     handler.dispatch().ok();
     let frame = handler.poll_frame();
-    
+
     if !frame.has_events() {
         return;
     }
-    
+
     for action in &frame.actions {
         match action {
             Action::Exit => {
                 session::request_shutdown();
                 return;
             }
-            
+
             Action::Reload => {
                 let new_config = Config::load();
                 data.state.config = new_config;
                 log::info!("Configuration reloaded");
             }
-            
+
             Action::Exec(cmd) | Action::ExecSpawn(cmd) => {
                 spawn_command(cmd, &data.socket_name);
             }
-            
+
             Action::Close => {
                 if let Some(focused_id) = data.state.focused_window {
                     data.state.close_window(focused_id);
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::Kill => {
                 if let Some(focused_id) = data.state.focused_window {
                     if let Some(client) = data.state.kill_window(focused_id) {
@@ -492,13 +527,13 @@ fn process_input(data: &mut LoopData) {
                                 object_id: 0,
                                 object_interface: "".to_string(),
                                 message: "Killed by user".to_string(),
-                            }
+                            },
                         );
                     }
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::Focus(direction) => {
                 let old_focus = data.state.focused_window;
                 match direction {
@@ -511,7 +546,9 @@ fn process_input(data: &mut LoopData) {
                 }
                 if data.state.focused_window != old_focus {
                     if let Some(ref mut ipc) = data.ipc_server {
-                        let focused_title = data.state.focused_window
+                        let focused_title = data
+                            .state
+                            .focused_window
                             .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
                             .map(|w| w.title.clone());
                         ipc.notify_focus_change(focused_title);
@@ -519,7 +556,7 @@ fn process_input(data: &mut LoopData) {
                 }
                 data.display.flush_clients().ok();
             }
-            
+
             Action::Move(direction) | Action::Swap(direction) => {
                 let old_focus = data.state.focused_window;
                 match direction {
@@ -532,7 +569,9 @@ fn process_input(data: &mut LoopData) {
                 }
                 if data.state.focused_window != old_focus {
                     if let Some(ref mut ipc) = data.ipc_server {
-                        let focused_title = data.state.focused_window
+                        let focused_title = data
+                            .state
+                            .focused_window
                             .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
                             .map(|w| w.title.clone());
                         ipc.notify_focus_change(focused_title);
@@ -540,7 +579,7 @@ fn process_input(data: &mut LoopData) {
                 }
                 data.display.flush_clients().ok();
             }
-            
+
             Action::Fullscreen(toggle) => {
                 if let Some(focused_id) = data.state.focused_window {
                     match toggle {
@@ -551,7 +590,7 @@ fn process_input(data: &mut LoopData) {
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::Floating(toggle) => {
                 if let Some(focused_id) = data.state.focused_window {
                     match toggle {
@@ -562,7 +601,7 @@ fn process_input(data: &mut LoopData) {
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::Maximize(toggle) => {
                 if let Some(focused_id) = data.state.focused_window {
                     match toggle {
@@ -573,14 +612,15 @@ fn process_input(data: &mut LoopData) {
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::Resize { direction, amount } => {
                 if let Some(focused_id) = data.state.focused_window {
-                    data.state.resize_window(focused_id, direction.clone(), *amount);
+                    data.state
+                        .resize_window(focused_id, direction.clone(), *amount);
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::Workspace(target) => {
                 let workspace = resolve_workspace_target(target, &data.state);
                 if let Some(ws) = workspace {
@@ -590,8 +630,10 @@ fn process_input(data: &mut LoopData) {
                         if let Some(ref mut ipc) = data.ipc_server {
                             let workspaces = get_workspace_info(&data.state);
                             ipc.notify_workspace_change(workspaces, data.state.active_workspace);
-                            
-                            let focused_title = data.state.focused_window
+
+                            let focused_title = data
+                                .state
+                                .focused_window
                                 .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
                                 .map(|w| w.title.clone());
                             ipc.notify_focus_change(focused_title);
@@ -600,7 +642,7 @@ fn process_input(data: &mut LoopData) {
                     data.display.flush_clients().ok();
                 }
             }
-            
+
             Action::MoveToWorkspace(target) => {
                 if let Some(focused_id) = data.state.focused_window {
                     let workspace = resolve_workspace_target(target, &data.state);
@@ -615,7 +657,7 @@ fn process_input(data: &mut LoopData) {
                 }
                 data.display.flush_clients().ok();
             }
-            
+
             Action::MoveToWorkspaceSilent(target) => {
                 if let Some(focused_id) = data.state.focused_window {
                     let workspace = resolve_workspace_target(target, &data.state);
@@ -629,24 +671,24 @@ fn process_input(data: &mut LoopData) {
                 }
                 data.display.flush_clients().ok();
             }
-            
+
             Action::SplitHorizontal | Action::SplitVertical | Action::SplitToggle => {
                 log::debug!("Split actions not yet implemented");
             }
-            
+
             Action::LayoutNext | Action::LayoutPrev | Action::LayoutSet(_) => {
                 log::debug!("Layout actions not yet implemented");
             }
-            
+
             Action::CursorTheme(_theme) => {
                 log::debug!("Cursor theme change not yet implemented");
             }
         }
     }
-    
+
     if frame.pointer.has_motion {
         let (screen_w, screen_h) = data.state.screen_size();
-        
+
         if let (Some(x), Some(y)) = (frame.pointer.absolute_x, frame.pointer.absolute_y) {
             data.state.handle_pointer_motion(x, y);
         } else if frame.pointer.accumulated_dx != 0.0 || frame.pointer.accumulated_dy != 0.0 {
@@ -657,27 +699,30 @@ fn process_input(data: &mut LoopData) {
             data.state.handle_pointer_motion(new_x, new_y);
         }
     }
-    
+
     for button in &frame.buttons {
         let old_focus = data.state.focused_window;
-        data.state.handle_pointer_button(button.button, button.pressed);
+        data.state
+            .handle_pointer_button(button.button, button.pressed);
         if button.pressed && data.state.focused_window != old_focus {
             if let Some(ref mut ipc) = data.ipc_server {
-                let focused_title = data.state.focused_window
+                let focused_title = data
+                    .state
+                    .focused_window
                     .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
                     .map(|w| w.title.clone());
                 ipc.notify_focus_change(focused_title);
             }
         }
     }
-    
+
     if frame.pointer.has_scroll {
         data.state.handle_pointer_axis(
             frame.pointer.scroll_horizontal,
             frame.pointer.scroll_vertical,
         );
     }
-    
+
     let focused_keyboards = data.state.get_focused_keyboards();
     if !focused_keyboards.is_empty() {
         for key in &frame.keys {
@@ -685,21 +730,30 @@ fn process_input(data: &mut LoopData) {
                 KeyState::Pressed => WlKeyState::Pressed,
                 KeyState::Released => WlKeyState::Released,
             };
-            
+
             let serial = data.state.next_keyboard_serial();
             for keyboard in &focused_keyboards {
                 keyboard.key(serial, 0, key.keycode, wl_state);
-                keyboard.modifiers(serial, key.mods_depressed, key.mods_latched, key.mods_locked, key.group);
+                keyboard.modifiers(
+                    serial,
+                    key.mods_depressed,
+                    key.mods_latched,
+                    key.mods_locked,
+                    key.group,
+                );
             }
         }
     }
-    
+
     data.display.flush_clients().ok();
 }
 
-fn resolve_workspace_target(target: &crate::config::WorkspaceTarget, state: &State) -> Option<usize> {
+fn resolve_workspace_target(
+    target: &crate::config::WorkspaceTarget,
+    state: &State,
+) -> Option<usize> {
     use crate::config::WorkspaceTarget;
-    
+
     match target {
         WorkspaceTarget::Number(n) => Some(*n),
         WorkspaceTarget::Next => {
@@ -721,8 +775,7 @@ fn resolve_workspace_target(target: &crate::config::WorkspaceTarget, state: &Sta
         WorkspaceTarget::Last => Some(state.workspace_count),
         WorkspaceTarget::Empty => {
             for ws in 1..=state.workspace_count {
-                let has_windows = state.windows.iter()
-                    .any(|w| w.workspace == ws && w.mapped);
+                let has_windows = state.windows.iter().any(|w| w.workspace == ws && w.mapped);
                 if !has_windows {
                     return Some(ws);
                 }
@@ -733,9 +786,8 @@ fn resolve_workspace_target(target: &crate::config::WorkspaceTarget, state: &Sta
 }
 
 fn spawn_command(cmd: &str, socket_name: &str) {
-    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| "/tmp".to_string());
-    
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if let Some((program, args)) = parts.split_first() {
         use std::os::unix::process::CommandExt;
@@ -745,14 +797,14 @@ fn spawn_command(cmd: &str, socket_name: &str) {
             .env("WAYLAND_DISPLAY", socket_name)
             .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
             .stderr(std::process::Stdio::null());
-        
+
         unsafe {
             command.pre_exec(|| {
                 libc::setsid();
                 Ok(())
             });
         }
-        
+
         match command.spawn() {
             Ok(child) => {
                 session::register_child(child.id());
@@ -765,33 +817,42 @@ fn spawn_command(cmd: &str, socket_name: &str) {
     }
 }
 
-fn render(state: &mut State, display: &mut Display<State>, drm_info: Option<&mut DrmInfo>, profiler_stats: Option<&renderer::ProfilerStats>) {
+fn render(
+    state: &mut State,
+    display: &mut Display<State>,
+    drm_info: Option<&mut DrmInfo>,
+    profiler_stats: Option<&renderer::ProfilerStats>,
+) {
     if state.gpu_renderer.is_some() {
         render_gpu(state, display, profiler_stats);
         return;
     }
-    
+
     render_cpu(state, display, drm_info);
 }
 
-fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: Option<&renderer::ProfilerStats>) {
+fn render_gpu(
+    state: &mut State,
+    display: &mut Display<State>,
+    profiler_stats: Option<&renderer::ProfilerStats>,
+) {
     if state.needs_relayout {
         state.needs_relayout = false;
         state.relayout_windows();
         display.flush_clients().ok();
     }
-    
+
     let has_pending_screencopy = !state.screencopy_frames.is_empty();
     let has_frame_callbacks = !state.frame_callbacks.is_empty();
     let has_damage = state.damage_tracker.has_damage();
     let has_profiler = profiler_stats.is_some();
-    
+
     if !has_damage && !has_pending_screencopy && !has_frame_callbacks && !has_profiler {
         return;
     }
-    
+
     let needs_render = has_damage || has_pending_screencopy || has_profiler;
-    
+
     if needs_render {
         let bg_dark = state.config.background_dark();
         let title_focused = state.config.title_focused();
@@ -799,28 +860,46 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
         let title_bar_height = state.config.title_bar_height();
         let focused_id = state.focused_window;
         let active_workspace = state.active_workspace;
-        let windows_needing_update: Vec<_> = state.windows.iter()
-            .filter(|w| w.mapped && w.buffer.is_some() && w.needs_redraw && w.workspace == active_workspace)
+        let windows_needing_update: Vec<_> = state
+            .windows
+            .iter()
+            .filter(|w| {
+                w.mapped && w.buffer.is_some() && w.needs_redraw && w.workspace == active_workspace
+            })
             .map(|w| w.id)
             .collect();
-        
+
         for id in &windows_needing_update {
             state.update_window_pixel_cache(*id);
         }
-        
-        let window_render_info: Vec<_> = state.windows.iter()
+
+        let window_render_info: Vec<_> = state
+            .windows
+            .iter()
             .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
             .map(|w| {
                 let buffer_id = w.buffer.as_ref().map(|b| b.id());
-                let is_shm = buffer_id.as_ref().map(|id| state.buffers.contains_key(id)).unwrap_or(false);
-                (w.id, w.geometry, w.cache_width, w.cache_height, w.cache_stride, is_shm, buffer_id, w.fullscreen)
+                let is_shm = buffer_id
+                    .as_ref()
+                    .map(|id| state.buffers.contains_key(id))
+                    .unwrap_or(false);
+                (
+                    w.id,
+                    w.geometry,
+                    w.cache_width,
+                    w.cache_height,
+                    w.cache_stride,
+                    is_shm,
+                    buffer_id,
+                    w.fullscreen,
+                )
             })
             .collect();
-        
+
         let gpu = state.gpu_renderer.as_mut().unwrap();
-        
+
         gpu.begin_frame();
-        
+
         let (width, height) = gpu.size();
         let bg_color = [
             ((bg_dark >> 16) & 0xFF) as f32 / 255.0,
@@ -829,35 +908,41 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
             1.0,
         ];
         gpu.draw_rect(0, 0, width as i32, height as i32, bg_color);
-        
-        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id, is_fullscreen) in &window_render_info {
+
+        for (id, geom, cache_w, cache_h, cache_stride, is_shm, buffer_id, is_fullscreen) in
+            &window_render_info
+        {
             let is_focused = focused_id == Some(*id);
-            
+
             let (content_y, effective_title_height) = if *is_fullscreen {
                 (geom.y, 0)
             } else {
-                let title_color = if is_focused { title_focused } else { title_unfocused };
+                let title_color = if is_focused {
+                    title_focused
+                } else {
+                    title_unfocused
+                };
                 let title_rgba = [
                     ((title_color >> 16) & 0xFF) as f32 / 255.0,
                     ((title_color >> 8) & 0xFF) as f32 / 255.0,
                     (title_color & 0xFF) as f32 / 255.0,
                     1.0,
                 ];
-                
+
                 let gpu = state.gpu_renderer.as_mut().unwrap();
                 gpu.draw_rect(geom.x, geom.y, geom.width, title_bar_height, title_rgba);
-                
+
                 (geom.y + title_bar_height, title_bar_height)
             };
-            
+
             let _ = effective_title_height;
-            
+
             if *is_shm {
                 let win = match state.windows.iter().find(|w| w.id == *id) {
                     Some(w) if !w.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => w,
                     _ => continue,
                 };
-                
+
                 let data: &[u8] = unsafe {
                     std::slice::from_raw_parts(
                         win.pixel_cache.as_ptr() as *const u8,
@@ -865,16 +950,16 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                     )
                 };
                 let gpu = state.gpu_renderer.as_mut().unwrap();
-                let texture = gpu.upload_shm_texture(*id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
-                
-                let gpu = state.gpu_renderer.as_mut().unwrap();
-                gpu.draw_texture(
-                    texture,
-                    geom.x,
-                    content_y,
-                    *cache_w as i32,
-                    *cache_h as i32,
+                let texture = gpu.upload_shm_texture(
+                    *id,
+                    *cache_w as u32,
+                    *cache_h as u32,
+                    *cache_stride as u32,
+                    data,
                 );
+
+                let gpu = state.gpu_renderer.as_mut().unwrap();
+                gpu.draw_texture(texture, geom.x, content_y, *cache_w as i32, *cache_h as i32);
             } else if let Some(buf_id) = buffer_id {
                 log::debug!("[render] Window {} has non-SHM buffer {:?}, checking dmabuf_buffers (count={})", 
                     id, buf_id, state.dmabuf_buffers.len());
@@ -884,8 +969,14 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                     let height = dmabuf_info.height;
                     let format = dmabuf_info.format;
                     let planes = &dmabuf_info.planes;
-                    log::debug!("[render] DMA-BUF window {}: {}x{} format={:#x} planes={}", 
-                        id, width, height, format, planes.len());
+                    log::debug!(
+                        "[render] DMA-BUF window {}: {}x{} format={:#x} planes={}",
+                        id,
+                        width,
+                        height,
+                        format,
+                        planes.len()
+                    );
                     let gpu = state.gpu_renderer.as_mut().unwrap();
                     let texture_result = if planes.is_empty() {
                         use std::os::fd::AsRawFd;
@@ -912,11 +1003,12 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                             planes,
                         )
                     };
-                    
+
                     if let Some(texture) = texture_result {
                         let is_external = gpu.is_dmabuf_external(buffer_cache_id);
                         let draw_width = geom.width;
-                        let draw_height = geom.height - if *is_fullscreen { 0 } else { title_bar_height };
+                        let draw_height =
+                            geom.height - if *is_fullscreen { 0 } else { title_bar_height };
                         gpu.draw_dmabuf_texture(
                             texture,
                             geom.x,
@@ -934,51 +1026,62 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                 }
             }
         }
-        
-        let layer_surfaces_needing_update: Vec<_> = state.layer_surfaces.iter()
+
+        let layer_surfaces_needing_update: Vec<_> = state
+            .layer_surfaces
+            .iter()
             .filter(|ls| ls.mapped && ls.buffer.is_some() && ls.needs_redraw)
             .map(|ls| ls.id)
             .collect();
-        
+
         for id in &layer_surfaces_needing_update {
             state.update_layer_surface_pixel_cache(*id);
         }
-        
-        let layer_render_info: Vec<_> = state.layer_surfaces.iter()
+
+        let layer_render_info: Vec<_> = state
+            .layer_surfaces
+            .iter()
             .filter(|ls| ls.mapped && ls.buffer.is_some())
             .map(|ls| {
                 let buffer_id = ls.buffer.as_ref().map(|b| b.id());
-                (ls.id, ls.geometry, ls.cache_width, ls.cache_height, ls.cache_stride, buffer_id)
+                (
+                    ls.id,
+                    ls.geometry,
+                    ls.cache_width,
+                    ls.cache_height,
+                    ls.cache_stride,
+                    buffer_id,
+                )
             })
             .collect();
-        
+
         for (id, geom, cache_w, cache_h, cache_stride, _buffer_id) in &layer_render_info {
             let ls = match state.layer_surfaces.iter().find(|ls| ls.id == *id) {
                 Some(ls) if !ls.pixel_cache.is_empty() && *cache_w > 0 && *cache_h > 0 => ls,
                 _ => continue,
             };
-            
+
             let data: &[u8] = unsafe {
                 std::slice::from_raw_parts(
                     ls.pixel_cache.as_ptr() as *const u8,
                     ls.pixel_cache.len() * 4,
                 )
             };
-            
+
             let texture_id = *id + 1_000_000;
             let gpu = state.gpu_renderer.as_mut().unwrap();
-            let texture = gpu.upload_shm_texture(texture_id, *cache_w as u32, *cache_h as u32, *cache_stride as u32, data);
-            
-            let gpu = state.gpu_renderer.as_mut().unwrap();
-            gpu.draw_texture(
-                texture,
-                geom.x,
-                geom.y,
-                *cache_w as i32,
-                *cache_h as i32,
+            let texture = gpu.upload_shm_texture(
+                texture_id,
+                *cache_w as u32,
+                *cache_h as u32,
+                *cache_stride as u32,
+                data,
             );
+
+            let gpu = state.gpu_renderer.as_mut().unwrap();
+            gpu.draw_texture(texture, geom.x, geom.y, *cache_w as i32, *cache_h as i32);
         }
-        
+
         for id in &layer_surfaces_needing_update {
             if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
                 ls.needs_redraw = false;
@@ -990,20 +1093,20 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                 }
             }
         }
-        
+
         if let Some(stats) = profiler_stats {
             let gpu = state.gpu_renderer.as_mut().unwrap();
             gpu.draw_profiler(stats);
         }
-        
+
         if state.cursor_visible {
             let gpu = state.gpu_renderer.as_mut().unwrap();
             gpu.draw_cursor(state.cursor_x, state.cursor_y);
         }
-        
+
         let gpu = state.gpu_renderer.as_mut().unwrap();
         gpu.end_frame();
-        
+
         for id in &windows_needing_update {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                 win.needs_redraw = false;
@@ -1015,27 +1118,27 @@ fn render_gpu(state: &mut State, display: &mut Display<State>, profiler_stats: O
                 }
             }
         }
-        
+
         if has_damage {
             state.damage_tracker.clear();
         }
     }
-    
+
     if has_pending_screencopy {
         state.process_screencopy_frames(true);
     }
-    
+
     if has_frame_callbacks {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u32;
-        
+
         for callback in state.frame_callbacks.drain(..) {
             callback.done(time);
         }
     }
-    
+
     display.flush_clients().ok();
 }
 
@@ -1045,18 +1148,18 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
         state.relayout_windows();
         display.flush_clients().ok();
     }
-    
+
     let has_pending_screencopy = !state.screencopy_frames.is_empty();
     let has_frame_callbacks = !state.frame_callbacks.is_empty();
     let has_damage = state.damage_tracker.has_damage();
     let cursor_only = state.damage_tracker.is_cursor_only() && !has_pending_screencopy;
-    
+
     if !has_damage && !has_pending_screencopy && !has_frame_callbacks {
         return;
     }
-    
+
     let needs_render = has_damage || has_pending_screencopy;
-    
+
     if needs_render {
         if cursor_only {
             state.canvas.restore_cursor();
@@ -1065,66 +1168,75 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
             }
         } else {
             state.canvas.restore_cursor();
-            
+
             let focused_id = state.focused_window;
             let active_workspace = state.active_workspace;
-            
-            let windows_to_render: Vec<_> = state.windows.iter()
+
+            let windows_to_render: Vec<_> = state
+                .windows
+                .iter()
                 .filter(|w| w.mapped && w.buffer.is_some() && w.workspace == active_workspace)
                 .map(|w| (w.id, w.fullscreen))
                 .collect();
-            
+
             for (id, _) in &windows_to_render {
                 state.update_window_pixel_cache(*id);
             }
 
             state.canvas.clear_with_pattern(
                 state.config.background_dark(),
-                state.config.background_light()
+                state.config.background_light(),
             );
-            
+
             let title_focused = state.config.title_focused();
             let title_unfocused = state.config.title_unfocused();
             let border_focused = state.config.border_focused();
             let border_unfocused = state.config.border_unfocused();
             let title_bar_height = state.config.title_bar_height();
-            
+
             for (id, is_fullscreen) in &windows_to_render {
                 if let Some(win) = state.windows.iter().find(|w| w.id == *id) {
                     if win.cache_width > 0 && win.cache_height > 0 {
                         let is_focused = focused_id == Some(*id);
-                        
+
                         if *is_fullscreen {
                             let render_width = (win.cache_width as i32).min(win.geometry.width);
                             let render_height = (win.cache_height as i32).min(win.geometry.height);
-                            
+
                             if render_width <= 0 || render_height <= 0 {
                                 continue;
                             }
-                            
+
                             state.canvas.blit_fast(
                                 &win.pixel_cache,
                                 render_width as usize,
                                 render_height as usize,
                                 win.cache_stride,
                                 win.geometry.x,
-                                win.geometry.y
+                                win.geometry.y,
                             );
                         } else {
                             let render_width = (win.cache_width as i32).min(win.geometry.width);
-                            let render_height = (win.cache_height as i32).min(win.geometry.height - title_bar_height);
-                            
+                            let render_height = (win.cache_height as i32)
+                                .min(win.geometry.height - title_bar_height);
+
                             if render_width <= 0 || render_height <= 0 {
                                 continue;
                             }
-                            
+
                             state.canvas.draw_decorations(
-                                win.geometry.x, win.geometry.y,
-                                render_width, render_height,
-                                title_bar_height, is_focused,
-                                title_focused, title_unfocused, border_focused, border_unfocused
+                                win.geometry.x,
+                                win.geometry.y,
+                                render_width,
+                                render_height,
+                                title_bar_height,
+                                is_focused,
+                                title_focused,
+                                title_unfocused,
+                                border_focused,
+                                border_unfocused,
                             );
-                            
+
                             let content_y = win.geometry.y + title_bar_height;
                             state.canvas.blit_fast(
                                 &win.pixel_cache,
@@ -1132,13 +1244,13 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                                 render_height as usize,
                                 win.cache_stride,
                                 win.geometry.x,
-                                content_y
+                                content_y,
                             );
                         }
                     }
                 }
             }
-            
+
             for (id, _) in &windows_to_render {
                 if let Some(win) = state.windows.iter_mut().find(|w| w.id == *id) {
                     win.needs_redraw = false;
@@ -1150,38 +1262,40 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                     }
                 }
             }
-            
-            let layer_surfaces_to_render: Vec<_> = state.layer_surfaces.iter()
+
+            let layer_surfaces_to_render: Vec<_> = state
+                .layer_surfaces
+                .iter()
                 .filter(|ls| ls.mapped && ls.buffer.is_some())
                 .map(|ls| ls.id)
                 .collect();
-            
+
             for id in &layer_surfaces_to_render {
                 state.update_layer_surface_pixel_cache(*id);
             }
-            
+
             for id in &layer_surfaces_to_render {
                 if let Some(ls) = state.layer_surfaces.iter().find(|ls| ls.id == *id) {
                     if ls.cache_width > 0 && ls.cache_height > 0 {
                         let render_width = (ls.cache_width as i32).min(ls.geometry.width);
                         let render_height = (ls.cache_height as i32).min(ls.geometry.height);
-                        
+
                         if render_width <= 0 || render_height <= 0 {
                             continue;
                         }
-                        
+
                         state.canvas.blit_fast(
                             &ls.pixel_cache,
                             render_width as usize,
                             render_height as usize,
                             ls.cache_stride,
                             ls.geometry.x,
-                            ls.geometry.y
+                            ls.geometry.y,
                         );
                     }
                 }
             }
-            
+
             for id in &layer_surfaces_to_render {
                 if let Some(ls) = state.layer_surfaces.iter_mut().find(|ls| ls.id == *id) {
                     ls.needs_redraw = false;
@@ -1193,21 +1307,21 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                     }
                 }
             }
-            
+
             if state.cursor_visible {
                 state.canvas.draw_cursor(state.cursor_x, state.cursor_y);
             }
         }
-        
+
         if has_damage {
             state.damage_tracker.clear();
         }
     }
-    
+
     if has_pending_screencopy {
         state.process_screencopy_frames(true);
     }
-    
+
     if needs_render {
         if let Some(drm) = drm_info {
             unsafe {
@@ -1215,34 +1329,35 @@ fn render_cpu(state: &mut State, display: &mut Display<State>, drm_info: Option<
                 let canvas_pixels = state.canvas.as_slice();
                 let copy_height = state.canvas.height.min(drm.height);
                 let copy_width = state.canvas.width.min(drm.width);
-                
+
                 for y in 0..copy_height {
                     let src_offset = y * state.canvas.stride;
                     let dst_offset = y * drm.width;
-                    
-                    if src_offset + copy_width <= canvas_pixels.len() && 
-                       dst_offset + copy_width <= fb_pixels.len() {
+
+                    if src_offset + copy_width <= canvas_pixels.len()
+                        && dst_offset + copy_width <= fb_pixels.len()
+                    {
                         std::ptr::copy_nonoverlapping(
                             canvas_pixels.as_ptr().add(src_offset),
                             fb_pixels.as_mut_ptr().add(dst_offset),
-                            copy_width
+                            copy_width,
                         );
                     }
                 }
             }
         }
     }
-    
+
     if has_damage || has_frame_callbacks {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u32;
-        
+
         for callback in state.frame_callbacks.drain(..) {
             callback.done(time);
         }
-        
+
         display.flush_clients().ok();
     }
 }
@@ -1292,7 +1407,7 @@ impl FrameProfiler {
             fps_frame_count: 0,
         }
     }
-    
+
     fn record_frame(&mut self, input_us: u64, render_us: u64, total_us: u64, state: &State) {
         self.frame_count += 1;
         self.fps_frame_count += 1;
@@ -1302,18 +1417,18 @@ impl FrameProfiler {
         self.last_render_us = render_us;
         self.last_input_us = input_us;
         self.last_frame_time_ms = total_us as f32 / 1000.0;
-        
+
         if total_us > 16666 {
             self.slow_frames += 1;
         }
-        
+
         let fps_elapsed = self.fps_update_time.elapsed();
         if fps_elapsed.as_millis() >= 500 {
             self.last_fps = self.fps_frame_count as f32 / fps_elapsed.as_secs_f32();
             self.fps_frame_count = 0;
             self.fps_update_time = std::time::Instant::now();
         }
-        
+
         if self.last_log_time.elapsed().as_secs() >= 5 {
             let frames = self.frame_count.max(1);
             log::info!(
@@ -1324,9 +1439,9 @@ impl FrameProfiler {
                 self.render_time_us / frames,
                 self.total_time_us / frames
             );
-            
+
             Self::log_memory_stats(state);
-            
+
             self.frame_count = 0;
             self.input_time_us = 0;
             self.render_time_us = 0;
@@ -1335,18 +1450,18 @@ impl FrameProfiler {
             self.last_log_time = std::time::Instant::now();
         }
     }
-    
+
     fn get_stats(&self, state: &State) -> renderer::ProfilerStats {
         let canvas_bytes = state.canvas.pixels.len() * 4;
-        let window_cache_bytes: usize = state.windows.iter()
-            .map(|w| w.pixel_cache.len() * 4)
-            .sum();
+        let window_cache_bytes: usize = state.windows.iter().map(|w| w.pixel_cache.len() * 4).sum();
         let memory_mb = (canvas_bytes + window_cache_bytes) as f32 / (1024.0 * 1024.0);
-        
-        let texture_count = state.gpu_renderer.as_ref()
+
+        let texture_count = state
+            .gpu_renderer
+            .as_ref()
             .map(|r| r.texture_count())
             .unwrap_or(0);
-        
+
         renderer::ProfilerStats {
             fps: self.last_fps,
             frame_time_ms: self.last_frame_time_ms,
@@ -1357,14 +1472,12 @@ impl FrameProfiler {
             texture_count,
         }
     }
-    
+
     fn log_memory_stats(state: &State) {
         let canvas_bytes = state.canvas.pixels.len() * 4;
-        let window_cache_bytes: usize = state.windows.iter()
-            .map(|w| w.pixel_cache.len() * 4)
-            .sum();
+        let window_cache_bytes: usize = state.windows.iter().map(|w| w.pixel_cache.len() * 4).sum();
         let total_mb = (canvas_bytes + window_cache_bytes) as f64 / (1024.0 * 1024.0);
-        
+
         log::debug!(
             "[mem] canvas={}KB window_cache={}KB total={:.2}MB windows={}",
             canvas_bytes / 1024,
@@ -1380,16 +1493,18 @@ fn process_ipc(data: &mut LoopData) {
         Some(s) => s,
         None => return,
     };
-    
+
     ipc.accept_connections();
-    
+
     let commands = ipc.poll_commands();
     for cmd in commands {
         match cmd {
             ktc_common::IpcCommand::GetState => {
                 let workspaces = get_workspace_info(&data.state);
                 let active = data.state.active_workspace;
-                let focused_title = data.state.focused_window
+                let focused_title = data
+                    .state
+                    .focused_window
                     .and_then(|id| data.state.windows.iter().find(|w| w.id == id))
                     .map(|w| w.title.clone());
                 ipc.send_state(workspaces, active, focused_title);
@@ -1406,7 +1521,9 @@ fn process_ipc(data: &mut LoopData) {
 fn get_workspace_info(state: &State) -> Vec<ktc_common::WorkspaceInfo> {
     (1..=state.workspace_count)
         .map(|id| {
-            let window_count = state.windows.iter()
+            let window_count = state
+                .windows
+                .iter()
                 .filter(|w| w.workspace == id && w.mapped)
                 .count();
             ktc_common::WorkspaceInfo {
@@ -1420,9 +1537,9 @@ fn get_workspace_info(state: &State) -> Vec<ktc_common::WorkspaceInfo> {
 }
 
 fn spawn_ktcbar(socket_name: &str) {
-    use std::process::{Command, Stdio};
     use std::os::unix::process::CommandExt;
-    
+    use std::process::{Command, Stdio};
+
     let ktcbar_path = match which_ktcbar() {
         Some(path) => path,
         None => {
@@ -1430,24 +1547,23 @@ fn spawn_ktcbar(socket_name: &str) {
             return;
         }
     };
-    
-    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| "/tmp".to_string());
-    
+
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+
     let mut command = Command::new(&ktcbar_path);
     command
         .env("WAYLAND_DISPLAY", socket_name)
         .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    
+
     unsafe {
         command.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
     }
-    
+
     match command.spawn() {
         Ok(child) => {
             session::register_child(child.id());
@@ -1463,7 +1579,7 @@ fn which_ktcbar() -> Option<String> {
     if std::path::Path::new("ktcbar").exists() {
         return Some("ktcbar".to_string());
     }
-    
+
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in path_var.split(':') {
             let candidate = std::path::Path::new(dir).join("ktcbar");
@@ -1472,13 +1588,13 @@ fn which_ktcbar() -> Option<String> {
             }
         }
     }
-    
+
     let common_paths = [
         "/usr/local/bin/ktcbar",
         "/usr/bin/ktcbar",
         "~/.local/bin/ktcbar",
     ];
-    
+
     for path in &common_paths {
         let expanded = if path.starts_with("~") {
             if let Ok(home) = std::env::var("HOME") {
@@ -1489,12 +1605,12 @@ fn which_ktcbar() -> Option<String> {
         } else {
             (*path).to_string()
         };
-        
+
         if std::path::Path::new(&expanded).exists() {
             return Some(expanded);
         }
     }
-    
+
     None
 }
 
@@ -1515,59 +1631,79 @@ struct DrmInfo {
 unsafe impl Send for DrmInfo {}
 
 fn setup_drm(device: &std::fs::File) -> Result<DrmInfo, Box<dyn std::error::Error>> {
-    use drm::control::{Device as ControlDevice, connector};
+    use drm::control::{connector, Device as ControlDevice};
     use std::os::fd::{AsFd, BorrowedFd};
-    
+
     struct Card(std::fs::File);
-    
+
     impl AsFd for Card {
         fn as_fd(&self) -> BorrowedFd<'_> {
             self.0.as_fd()
         }
     }
-    
+
     impl drm::Device for Card {}
     impl ControlDevice for Card {}
-    
+
     let card = Card(device.try_clone()?);
-    
+
     let res = card.resource_handles()?;
-    let connectors: Vec<_> = res.connectors().iter()
+    let connectors: Vec<_> = res
+        .connectors()
+        .iter()
         .filter_map(|&conn| card.get_connector(conn, true).ok())
         .collect();
-    
-    let connector = connectors.iter()
+
+    let connector = connectors
+        .iter()
         .find(|c| c.state() == connector::State::Connected)
         .ok_or("No connected display found")?;
-    
+
     let connector_name = format!("{:?}-{}", connector.interface(), connector.interface_id());
-    
-    let mode = connector.modes().first()
+
+    let mode = connector
+        .modes()
+        .first()
         .ok_or("No display mode available")?;
-    
+
     let (width, height) = mode.size();
     let refresh = mode.vrefresh() as i32 * 1000;
-    
+
     let (phys_width, phys_height) = connector.size().unwrap_or((0, 0));
-    
-    log::info!("Using display mode: {}x{} @{}Hz (physical: {}x{}mm) on {}", 
-        width, height, mode.vrefresh(), phys_width, phys_height, connector_name);
-    
-    let crtc_handle = res.crtcs().first()
-        .copied()
-        .ok_or("No CRTC available")?;
-    
-    let db = card.create_dumb_buffer((width.into(), height.into()), drm::buffer::DrmFourcc::Xrgb8888, 32)?;
-    
+
+    log::info!(
+        "Using display mode: {}x{} @{}Hz (physical: {}x{}mm) on {}",
+        width,
+        height,
+        mode.vrefresh(),
+        phys_width,
+        phys_height,
+        connector_name
+    );
+
+    let crtc_handle = res.crtcs().first().copied().ok_or("No CRTC available")?;
+
+    let db = card.create_dumb_buffer(
+        (width.into(), height.into()),
+        drm::buffer::DrmFourcc::Xrgb8888,
+        32,
+    )?;
+
     let fb_handle = card.add_framebuffer(&db, 24, 32)?;
-    
-    card.set_crtc(crtc_handle, Some(fb_handle), (0, 0), &[connector.handle()], Some(*mode))?;
-    
+
+    card.set_crtc(
+        crtc_handle,
+        Some(fb_handle),
+        (0, 0),
+        &[connector.handle()],
+        Some(*mode),
+    )?;
+
     let db_leaked: &'static mut drm::control::dumbbuffer::DumbBuffer = Box::leak(Box::new(db));
-    
+
     let map_handle = card.map_dumb_buffer(db_leaked)?;
     let fb_ptr = map_handle.as_ptr() as *mut u32;
-    
+
     Ok(DrmInfo {
         _device: card.0,
         _mapping: map_handle,

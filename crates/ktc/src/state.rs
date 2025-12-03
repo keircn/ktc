@@ -1,13 +1,21 @@
-use std::collections::HashMap;
-use std::os::fd::{OwnedFd, AsFd, AsRawFd};
-use std::ptr::NonNull;
-use wayland_server::protocol::{wl_surface::WlSurface, wl_buffer::WlBuffer, wl_shm_pool::WlShmPool, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_pointer::WlPointer, wl_output::WlOutput};
-use wayland_server::Resource;
-use wayland_protocols::xdg::shell::server::{xdg_surface::XdgSurface, xdg_toplevel::{XdgToplevel, State as ToplevelState}};
-use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{Anchor, ZwlrLayerSurfaceV1, KeyboardInteractivity};
-use wayland_server::backend::ObjectId;
-use crate::protocols::screencopy::PendingScreencopy;
 use crate::config::Config;
+use crate::protocols::screencopy::PendingScreencopy;
+use std::collections::HashMap;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::ptr::NonNull;
+use wayland_protocols::xdg::shell::server::{
+    xdg_surface::XdgSurface,
+    xdg_toplevel::{State as ToplevelState, XdgToplevel},
+};
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{
+    Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1,
+};
+use wayland_server::backend::ObjectId;
+use wayland_server::protocol::{
+    wl_buffer::WlBuffer, wl_callback::WlCallback, wl_keyboard::WlKeyboard, wl_output::WlOutput,
+    wl_pointer::WlPointer, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
+};
+use wayland_server::Resource;
 
 pub type WindowId = u64;
 pub type OutputId = u64;
@@ -32,7 +40,12 @@ impl Rectangle {
         let y1 = self.y.min(other.y);
         let x2 = (self.x + self.width).max(other.x + other.width);
         let y2 = (self.y + self.height).max(other.y + other.height);
-        Rectangle { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
+        Rectangle {
+            x: x1,
+            y: y1,
+            width: x2 - x1,
+            height: y2 - y1,
+        }
     }
 
     #[allow(dead_code)]
@@ -81,7 +94,7 @@ impl DamageTracker {
             self.regions.push(rect);
         }
     }
-    
+
     pub fn add_cursor_damage(&mut self) {
         if !self.full_damage && self.regions.is_empty() {
             self.cursor_only = true;
@@ -99,7 +112,7 @@ impl DamageTracker {
     pub fn has_damage(&self) -> bool {
         self.full_damage || !self.regions.is_empty() || self.cursor_only
     }
-    
+
     pub fn is_cursor_only(&self) -> bool {
         self.cursor_only && !self.full_damage && self.regions.is_empty()
     }
@@ -123,7 +136,12 @@ impl DamageTracker {
 
     pub fn merged_damage(&self, screen_width: i32, screen_height: i32) -> Rectangle {
         if self.full_damage {
-            return Rectangle { x: 0, y: 0, width: screen_width, height: screen_height };
+            return Rectangle {
+                x: 0,
+                y: 0,
+                width: screen_width,
+                height: screen_height,
+            };
         }
         let mut result = Rectangle::default();
         for r in &self.regions {
@@ -214,7 +232,7 @@ pub struct Canvas {
 impl Canvas {
     const CURSOR_W: usize = 16;
     const CURSOR_H: usize = 20;
-    
+
     pub fn new(width: usize, height: usize, bg_color: u32) -> Self {
         let stride = width;
         let pixels = vec![bg_color; width * height];
@@ -244,44 +262,52 @@ impl Canvas {
     pub fn clear(&mut self, color: u32) {
         self.pixels.fill(color);
     }
-    
+
     pub fn clear_with_pattern(&mut self, bg_dark: u32, bg_light: u32) {
         let tile_size = 32;
-        
+
         let width = self.width;
         let stride = self.stride;
         let pixels = &mut self.pixels;
-        
+
         for y in 0..self.height {
             let ty = y / tile_size;
             let row_start = y * stride;
             let base_color = if ty % 2 == 0 { bg_dark } else { bg_light };
             let alt_color = if ty % 2 == 0 { bg_light } else { bg_dark };
-            
+
             let mut x = 0;
             while x < width {
                 let tx = x / tile_size;
                 let color = if tx % 2 == 0 { base_color } else { alt_color };
                 let tile_end = ((tx + 1) * tile_size).min(width);
                 let fill_len = tile_end - x;
-                
+
                 let start = row_start + x;
                 let end = start + fill_len;
                 pixels[start..end].fill(color);
-                
+
                 x = tile_end;
             }
         }
     }
 
     #[allow(dead_code)]
-    pub fn draw_border(&mut self, x: i32, y: i32, width: i32, height: i32, color: u32, thickness: i32) {
+    pub fn draw_border(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        color: u32,
+        thickness: i32,
+    ) {
         let x = x.max(0) as usize;
         let y = y.max(0) as usize;
         let width = width as usize;
         let height = height as usize;
         let thickness = thickness as usize;
-        
+
         for dy in 0..thickness.min(height) {
             for dx in 0..width {
                 let px = x + dx;
@@ -291,7 +317,7 @@ impl Canvas {
                 }
             }
         }
-        
+
         for dy in 0..thickness.min(height) {
             for dx in 0..width {
                 let px = x + dx;
@@ -301,7 +327,7 @@ impl Canvas {
                 }
             }
         }
-        
+
         for dy in 0..height {
             for dx in 0..thickness.min(width) {
                 let px = x + dx;
@@ -311,7 +337,7 @@ impl Canvas {
                 }
             }
         }
-        
+
         for dy in 0..height {
             for dx in 0..thickness.min(width) {
                 let px = x + width.saturating_sub(1 + dx);
@@ -324,7 +350,14 @@ impl Canvas {
     }
 
     #[allow(dead_code)]
-    pub fn blit(&mut self, src: &[u32], src_width: usize, src_height: usize, dst_x: i32, dst_y: i32) {
+    pub fn blit(
+        &mut self,
+        src: &[u32],
+        src_width: usize,
+        src_height: usize,
+        dst_x: i32,
+        dst_y: i32,
+    ) {
         let dst_x = dst_x.max(0) as usize;
         let dst_y = dst_y.max(0) as usize;
 
@@ -350,7 +383,15 @@ impl Canvas {
         }
     }
 
-    pub fn blit_fast(&mut self, src: &[u32], src_width: usize, src_height: usize, src_stride: usize, dst_x: i32, dst_y: i32) {
+    pub fn blit_fast(
+        &mut self,
+        src: &[u32],
+        src_width: usize,
+        src_height: usize,
+        src_stride: usize,
+        dst_x: i32,
+        dst_y: i32,
+    ) {
         let dst_x = dst_x.max(0) as usize;
         let dst_y = dst_y.max(0) as usize;
 
@@ -360,7 +401,8 @@ impl Canvas {
             let dst_offset = dst_row * self.stride + dst_x;
             let copy_width = src_width.min(self.width.saturating_sub(dst_x));
 
-            if src_offset + copy_width <= src.len() && dst_offset + copy_width <= self.pixels.len() {
+            if src_offset + copy_width <= src.len() && dst_offset + copy_width <= self.pixels.len()
+            {
                 self.pixels[dst_offset..dst_offset + copy_width]
                     .copy_from_slice(&src[src_offset..src_offset + copy_width]);
             }
@@ -368,40 +410,50 @@ impl Canvas {
     }
 
     #[allow(dead_code)]
-    pub fn blit_direct(&mut self, src: &[u32], src_width: usize, src_height: usize, src_stride: usize, dst_x: i32, dst_y: i32) {
+    pub fn blit_direct(
+        &mut self,
+        src: &[u32],
+        src_width: usize,
+        src_height: usize,
+        src_stride: usize,
+        dst_x: i32,
+        dst_y: i32,
+    ) {
         if dst_x >= self.width as i32 || dst_y >= self.height as i32 {
             return;
         }
-        
+
         let dst_x_usize = dst_x.max(0) as usize;
         let dst_y_usize = dst_y.max(0) as usize;
         let src_skip_x = if dst_x < 0 { (-dst_x) as usize } else { 0 };
         let src_skip_y = if dst_y < 0 { (-dst_y) as usize } else { 0 };
-        
+
         let actual_src_width = src_width.saturating_sub(src_skip_x);
         let actual_src_height = src_height.saturating_sub(src_skip_y);
         let copy_width = actual_src_width.min(self.width.saturating_sub(dst_x_usize));
         let copy_height = actual_src_height.min(self.height.saturating_sub(dst_y_usize));
-        
+
         if copy_width == 0 || copy_height == 0 {
             return;
         }
-        
+
         let dst_ptr = self.pixels.as_mut_ptr();
         let src_ptr = src.as_ptr();
-        
+
         unsafe {
             for y in 0..copy_height {
                 let src_row = src_skip_y + y;
                 let dst_row = dst_y_usize + y;
                 let src_offset = src_row * src_stride + src_skip_x;
                 let dst_offset = dst_row * self.stride + dst_x_usize;
-                
-                if src_offset + copy_width <= src.len() && dst_offset + copy_width <= self.pixels.len() {
+
+                if src_offset + copy_width <= src.len()
+                    && dst_offset + copy_width <= self.pixels.len()
+                {
                     std::ptr::copy_nonoverlapping(
                         src_ptr.add(src_offset),
                         dst_ptr.add(dst_offset),
-                        copy_width
+                        copy_width,
                     );
                 }
             }
@@ -418,16 +470,36 @@ impl Canvas {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_decorations(&mut self, x: i32, y: i32, width: i32, height: i32, title_height: i32, is_focused: bool, title_focused: u32, title_unfocused: u32, border_focused: u32, border_unfocused: u32) {
-        let title_bg = if is_focused { title_focused } else { title_unfocused };
-        let border_color = if is_focused { border_focused } else { border_unfocused };
-        
+    pub fn draw_decorations(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        title_height: i32,
+        is_focused: bool,
+        title_focused: u32,
+        title_unfocused: u32,
+        border_focused: u32,
+        border_unfocused: u32,
+    ) {
+        let title_bg = if is_focused {
+            title_focused
+        } else {
+            title_unfocused
+        };
+        let border_color = if is_focused {
+            border_focused
+        } else {
+            border_unfocused
+        };
+
         let x = x.max(0) as usize;
         let y = y.max(0) as usize;
         let width = width as usize;
         let title_height = title_height as usize;
         let total_height = height as usize + title_height;
-        
+
         for dy in 0..title_height {
             for dx in 0..width {
                 let px = x + dx;
@@ -437,7 +509,7 @@ impl Canvas {
                 }
             }
         }
-        
+
         for dx in 0..width {
             let px = x + dx;
             if px < self.width && y < self.height {
@@ -468,7 +540,7 @@ impl Canvas {
                 }
             }
         }
-        
+
         let title_bottom = y + title_height;
         if title_bottom < self.height {
             for dx in 0..width {
@@ -479,10 +551,10 @@ impl Canvas {
             }
         }
     }
-    
+
     pub fn draw_cursor(&mut self, x: i32, y: i32) {
         self.save_under_cursor(x, y);
-        
+
         // W = white, B = black outline, . = transparent
         const CURSOR: &[&str] = &[
             "BW",
@@ -505,7 +577,7 @@ impl Canvas {
             "......BWWB",
             "......BBB",
         ];
-        
+
         for (dy, row) in CURSOR.iter().enumerate() {
             for (dx, ch) in row.chars().enumerate() {
                 let px = x as usize + dx;
@@ -521,13 +593,13 @@ impl Canvas {
             }
         }
     }
-    
+
     fn save_under_cursor(&mut self, x: i32, y: i32) {
         self.cursor_save_x = x;
         self.cursor_save_y = y;
         let x = x.max(0) as usize;
         let y = y.max(0) as usize;
-        
+
         for dy in 0..Self::CURSOR_H {
             let py = y + dy;
             if py >= self.height {
@@ -542,14 +614,14 @@ impl Canvas {
             }
         }
     }
-    
+
     pub fn restore_cursor(&mut self) {
         if self.cursor_save_x < 0 && self.cursor_save_y < 0 {
             return;
         }
         let x = self.cursor_save_x.max(0) as usize;
         let y = self.cursor_save_y.max(0) as usize;
-        
+
         for dy in 0..Self::CURSOR_H {
             let py = y + dy;
             if py >= self.height {
@@ -563,7 +635,7 @@ impl Canvas {
                 self.pixels[py * self.stride + px] = self.cursor_save[dy * Self::CURSOR_W + dx];
             }
         }
-        
+
         self.cursor_save_x = -100;
         self.cursor_save_y = -100;
     }
@@ -657,7 +729,7 @@ pub struct State {
     pub shm_pools: HashMap<ObjectId, ShmPoolData>,
     pub buffers: HashMap<ObjectId, BufferData>,
     pub dmabuf_buffers: HashMap<ObjectId, DmaBufBufferInfo>,
-    
+
     pub subsurfaces: HashMap<ObjectId, ObjectId>,
 
     pub frame_callbacks: Vec<WlCallback>,
@@ -667,26 +739,26 @@ pub struct State {
     pub pointers: Vec<WlPointer>,
     pub keyboard_serial: u32,
     pub pointer_serial: u32,
-    
+
     pub pointer_x: f64,
     pub pointer_y: f64,
     pub pointer_focus: Option<WindowId>,
-    
+
     pub cursor_x: i32,
     pub cursor_y: i32,
     pub cursor_visible: bool,
-    
+
     pub keymap_data: Option<KeymapData>,
-    
+
     pub pending_xdg_surfaces: HashMap<u32, (XdgSurface, WlSurface)>,
-    
+
     pub needs_relayout: bool,
-    
+
     pub screencopy_frames: Vec<PendingScreencopy>,
 
     pub damage_tracker: DamageTracker,
     pub last_cursor_pos: (i32, i32),
-    
+
     pub active_workspace: usize,
     pub workspace_count: usize,
     pub pending_title_change: Option<String>,
@@ -755,10 +827,10 @@ impl State {
     pub fn new(config: Config) -> Self {
         let default_width = 1920;
         let default_height = 1080;
-        
+
         let keymap_data = Self::create_keymap(&config);
         let bg_color = config.background_dark();
-        
+
         Self {
             config,
             windows: Vec::new(),
@@ -797,11 +869,11 @@ impl State {
             pending_title_change: None,
         }
     }
-    
+
     fn create_keymap(config: &Config) -> Option<KeymapData> {
         use std::io::Write;
         use std::os::fd::FromRawFd;
-        
+
         let xkb_context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
         let keymap = xkbcommon::xkb::Keymap::new_from_names(
             &xkb_context,
@@ -816,18 +888,18 @@ impl State {
             },
             xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
         )?;
-        
+
         let keymap_string = keymap.get_as_string(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1);
         let keymap_bytes = keymap_string.as_bytes();
         let size = keymap_bytes.len() + 1;
-        
+
         let name = std::ffi::CString::new("ktc-keymap").ok()?;
         let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
         if fd < 0 {
             log::error!("Failed to create memfd for keymap");
             return None;
         }
-        
+
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
         if file.write_all(keymap_bytes).is_err() {
             log::error!("Failed to write keymap to memfd");
@@ -837,35 +909,36 @@ impl State {
             log::error!("Failed to write null terminator to keymap");
             return None;
         }
-        
+
         log::debug!("Created keymap (size={})", size);
-        
+
         Some(KeymapData {
             fd: file.into(),
             size: size as u32,
         })
     }
-    
+
     pub fn add_output(&mut self, name: String, width: i32, height: i32) -> OutputId {
         let id = self.next_output_id;
         self.next_output_id += 1;
-        
+
         let output = Output::new(id, name, width, height);
         self.outputs.push(output);
-        
+
         if self.outputs.len() == 1 {
             let bg_color = self.config.background_dark();
-            self.canvas.resize(width as usize, height as usize, bg_color);
+            self.canvas
+                .resize(width as usize, height as usize, bg_color);
         }
-        
+
         self.relayout_windows();
-        
+
         id
     }
-    
+
     pub fn configure_output(&mut self, id: OutputId, config: OutputConfig) {
         let is_primary = self.outputs.first().map(|o| o.id) == Some(id);
-        
+
         let (new_width, new_height) = {
             if let Some(output) = self.outputs.iter_mut().find(|o| o.id == id) {
                 if let Some(make) = config.make {
@@ -891,24 +964,25 @@ impl State {
                 if let Some(transform) = config.transform {
                     output.transform = transform;
                 }
-                
+
                 (output.width, output.height)
             } else {
                 return;
             }
         };
-        
+
         if is_primary {
             let bg_color = self.config.background_dark();
-            self.canvas.resize(new_width as usize, new_height as usize, bg_color);
+            self.canvas
+                .resize(new_width as usize, new_height as usize, bg_color);
         }
-        
+
         self.send_output_configuration(id);
     }
-    
+
     fn send_output_configuration(&self, id: OutputId) {
         use wayland_server::protocol::wl_output::{Mode, Subpixel, Transform};
-        
+
         if let Some(output) = self.outputs.iter().find(|o| o.id == id) {
             let transform = match output.transform {
                 OutputTransform::Normal => Transform::Normal,
@@ -920,7 +994,7 @@ impl State {
                 OutputTransform::FlippedRotate180 => Transform::Flipped180,
                 OutputTransform::FlippedRotate270 => Transform::Flipped270,
             };
-            
+
             for wl_output in &output.wl_outputs {
                 if wl_output.version() >= 2 {
                     wl_output.scale(output.scale.max(1));
@@ -950,7 +1024,7 @@ impl State {
             }
         }
     }
-    
+
     pub fn register_wl_output(&mut self, wl_output: WlOutput) {
         if let Some(output) = self.outputs.first_mut() {
             output.wl_outputs.push(wl_output);
@@ -958,21 +1032,21 @@ impl State {
             self.send_output_configuration(id);
         }
     }
-    
+
     pub fn primary_output(&self) -> Option<&Output> {
         self.outputs.first()
     }
-    
+
     pub fn title_bar_height(&self) -> i32 {
         self.config.title_bar_height()
     }
-    
+
     pub fn screen_size(&self) -> (i32, i32) {
         self.primary_output()
             .map(|o| (o.width, o.height))
             .unwrap_or((1920, 1080))
     }
-    
+
     #[allow(dead_code)]
     pub fn set_screen_size(&mut self, width: i32, height: i32) {
         if self.outputs.is_empty() {
@@ -981,57 +1055,81 @@ impl State {
             output.width = width;
             output.height = height;
             let bg_color = self.config.background_dark();
-            self.canvas.resize(width as usize, height as usize, bg_color);
+            self.canvas
+                .resize(width as usize, height as usize, bg_color);
             let id = output.id;
             self.send_output_configuration(id);
         }
         self.damage_tracker.mark_full_damage();
         self.relayout_windows();
     }
-    
+
     pub fn mark_surface_damage(&mut self, surface_id: ObjectId) {
-        if let Some(window) = self.windows.iter_mut().find(|w| w.wl_surface.id() == surface_id) {
+        if let Some(window) = self
+            .windows
+            .iter_mut()
+            .find(|w| w.wl_surface.id() == surface_id)
+        {
             window.needs_redraw = true;
             let geometry = window.geometry;
             self.damage_tracker.add_damage(geometry);
         }
     }
-    
+
     pub fn mark_layer_surface_damage(&mut self, surface_id: ObjectId) {
-        if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
+        if let Some(ls) = self
+            .layer_surfaces
+            .iter_mut()
+            .find(|ls| ls.wl_surface.id() == surface_id)
+        {
             ls.needs_redraw = true;
             let geometry = ls.geometry;
             self.damage_tracker.add_damage(geometry);
         }
     }
-    
+
     pub fn next_keyboard_serial(&mut self) -> u32 {
         self.keyboard_serial = self.keyboard_serial.wrapping_add(1);
         self.keyboard_serial
     }
-    
+
     pub fn next_pointer_serial(&mut self) -> u32 {
         self.pointer_serial = self.pointer_serial.wrapping_add(1);
         self.pointer_serial
     }
-    
+
     #[allow(dead_code)]
-    pub fn add_window(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface) -> WindowId {
+    pub fn add_window(
+        &mut self,
+        xdg_surface: XdgSurface,
+        xdg_toplevel: XdgToplevel,
+        wl_surface: WlSurface,
+    ) -> WindowId {
         let id = self.add_window_without_relayout(xdg_surface, xdg_toplevel, wl_surface);
         self.relayout_windows();
         id
     }
-    
-    pub fn add_window_without_relayout(&mut self, xdg_surface: XdgSurface, xdg_toplevel: XdgToplevel, wl_surface: WlSurface) -> WindowId {
+
+    pub fn add_window_without_relayout(
+        &mut self,
+        xdg_surface: XdgSurface,
+        xdg_toplevel: XdgToplevel,
+        wl_surface: WlSurface,
+    ) -> WindowId {
         let id = self.next_window_id;
         self.next_window_id += 1;
-        
-        log::debug!("[window] Adding window {} with surface {:?}", id, wl_surface.id());
-        
+
+        log::debug!(
+            "[window] Adding window {} with surface {:?}",
+            id,
+            wl_surface.id()
+        );
+
         let (screen_width, screen_height) = self.screen_size();
         let num_windows = self.windows.len() + 1;
-        let geometry = calculate_tiling_geometry(num_windows - 1, num_windows, screen_width, screen_height);
-        
+        let geometry =
+            calculate_tiling_geometry(num_windows - 1, num_windows, screen_width, screen_height);
+
         self.windows.push(Window {
             id,
             xdg_surface,
@@ -1055,115 +1153,141 @@ impl State {
             maximized: false,
             saved_geometry: None,
         });
-        
+
         self.damage_tracker.mark_full_damage();
-        
+
         id
     }
-    
+
     pub fn relayout_windows(&mut self) {
         let active_workspace = self.active_workspace;
-        let tiled_window_ids: Vec<WindowId> = self.windows.iter()
-            .filter(|w| w.workspace == active_workspace && !w.floating && !w.fullscreen && !w.maximized)
+        let tiled_window_ids: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|w| {
+                w.workspace == active_workspace && !w.floating && !w.fullscreen && !w.maximized
+            })
             .map(|w| w.id)
             .collect();
-        
-        let all_workspace_window_ids: Vec<WindowId> = self.windows.iter()
+
+        let all_workspace_window_ids: Vec<WindowId> = self
+            .windows
+            .iter()
             .filter(|w| w.workspace == active_workspace)
             .map(|w| w.id)
             .collect();
-        
+
         let (screen_width, screen_height) = self.screen_size();
         let num_tiled = tiled_window_ids.len();
-        
+
         for (i, window_id) in tiled_window_ids.iter().enumerate() {
             if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
-                let new_geometry = calculate_tiling_geometry(i, num_tiled, screen_width, screen_height);
+                let new_geometry =
+                    calculate_tiling_geometry(i, num_tiled, screen_width, screen_height);
                 if window.geometry != new_geometry {
                     let old_geom = window.geometry;
                     window.geometry = new_geometry;
                     window.needs_redraw = true;
-                    
-                    if old_geom.width != new_geometry.width || old_geom.height != new_geometry.height {
+
+                    if old_geom.width != new_geometry.width
+                        || old_geom.height != new_geometry.height
+                    {
                         window.cache_width = 0;
                         window.cache_height = 0;
                     }
                 }
             }
         }
-        
+
         self.damage_tracker.mark_full_damage();
-        
+
         for window_id in &all_workspace_window_ids {
             let (geometry, xdg_surface, xdg_toplevel, is_fullscreen) = {
                 let window = match self.windows.iter().find(|w| w.id == *window_id) {
                     Some(w) => w,
                     None => continue,
                 };
-                (window.geometry, window.xdg_surface.clone(), window.xdg_toplevel.clone(), window.fullscreen)
+                (
+                    window.geometry,
+                    window.xdg_surface.clone(),
+                    window.xdg_toplevel.clone(),
+                    window.fullscreen,
+                )
             };
-            
+
             let states = self.get_toplevel_states(*window_id);
             let serial = self.next_keyboard_serial();
-            
-            let title_bar_height = if is_fullscreen { 0 } else { self.config.title_bar_height() };
+
+            let title_bar_height = if is_fullscreen {
+                0
+            } else {
+                self.config.title_bar_height()
+            };
             let client_height = (geometry.height - title_bar_height).max(1);
             xdg_toplevel.configure(geometry.width, client_height, states);
             xdg_surface.configure(serial);
         }
     }
-    
+
     pub fn get_window_mut(&mut self, id: WindowId) -> Option<&mut Window> {
         self.windows.iter_mut().find(|w| w.id == id)
     }
-    
+
     pub fn get_window_by_surface(&mut self, surface: &WlSurface) -> Option<&mut Window> {
         let surface_id = surface.id();
-        if let Some(idx) = self.windows.iter().position(|w| w.wl_surface.id() == surface_id) {
+        if let Some(idx) = self
+            .windows
+            .iter()
+            .position(|w| w.wl_surface.id() == surface_id)
+        {
             return Some(&mut self.windows[idx]);
         }
         let mut current_id = surface_id;
         while let Some(parent_id) = self.subsurfaces.get(&current_id).cloned() {
-            if let Some(idx) = self.windows.iter().position(|w| w.wl_surface.id() == parent_id) {
+            if let Some(idx) = self
+                .windows
+                .iter()
+                .position(|w| w.wl_surface.id() == parent_id)
+            {
                 return Some(&mut self.windows[idx]);
             }
             current_id = parent_id;
         }
         None
     }
-    
+
     #[allow(dead_code)]
     pub fn get_focused_window(&mut self) -> Option<&mut Window> {
         let focused_id = self.focused_window?;
         self.windows.iter_mut().find(|w| w.id == focused_id)
     }
-    
+
     pub fn get_toplevel_states(&self, window_id: WindowId) -> Vec<u8> {
         let window = match self.windows.iter().find(|w| w.id == window_id) {
             Some(w) => w,
             None => return vec![],
         };
-        
+
         let num_windows = self.windows.len();
         let window_index = self.windows.iter().position(|w| w.id == window_id);
         let is_focused = self.focused_window == Some(window_id);
-        
+
         let mut states = vec![];
-        
+
         if is_focused {
             states.extend_from_slice(&(ToplevelState::Activated as u32).to_ne_bytes());
         }
-        
+
         if window.fullscreen {
             states.extend_from_slice(&(ToplevelState::Fullscreen as u32).to_ne_bytes());
             return states;
         }
-        
+
         if window.maximized {
             states.extend_from_slice(&(ToplevelState::Maximized as u32).to_ne_bytes());
             return states;
         }
-        
+
         if !window.floating && num_windows >= 2 {
             if num_windows == 2 {
                 if window_index == Some(0) {
@@ -1182,10 +1306,10 @@ impl State {
                 states.extend_from_slice(&(ToplevelState::TiledBottom as u32).to_ne_bytes());
             }
         }
-        
+
         states
     }
-    
+
     pub fn remove_window(&mut self, id: WindowId) {
         if let Some(pos) = self.windows.iter().position(|w| w.id == id) {
             let geometry = self.windows[pos].geometry;
@@ -1193,8 +1317,9 @@ impl State {
             self.windows.swap_remove(pos);
             log::debug!("[window] Removed window {}", id);
         }
-        self.keyboard_to_window.retain(|_, window_id| *window_id != id);
-        
+        self.keyboard_to_window
+            .retain(|_, window_id| *window_id != id);
+
         if self.focused_window == Some(id) {
             self.focused_window = None;
             if let Some(first_window) = self.windows.first() {
@@ -1202,210 +1327,238 @@ impl State {
                 self.set_focus(new_focus_id);
             }
         }
-        
+
         self.damage_tracker.mark_full_damage();
     }
-    
+
     pub fn close_window(&mut self, id: WindowId) {
         if let Some(window) = self.windows.iter().find(|w| w.id == id) {
             if window.wl_surface.client().is_some() {
                 window.xdg_toplevel.close();
             } else {
-                log::info!("[window] Client for window {} is dead, removing directly", id);
+                log::info!(
+                    "[window] Client for window {} is dead, removing directly",
+                    id
+                );
                 self.remove_window(id);
                 self.relayout_windows();
             }
         }
     }
-    
+
     pub fn cleanup_dead_windows(&mut self) -> bool {
-        let dead_windows: Vec<WindowId> = self.windows.iter()
+        let dead_windows: Vec<WindowId> = self
+            .windows
+            .iter()
             .filter(|w| w.wl_surface.client().is_none())
             .map(|w| w.id)
             .collect();
-        
+
         let had_dead = !dead_windows.is_empty();
         for id in dead_windows {
             log::info!("[window] Cleaning up dead window {}", id);
             self.remove_window(id);
         }
-        
+
         if had_dead {
             self.relayout_windows();
         }
-        
+
         had_dead
     }
-    
+
     pub fn kill_window(&mut self, id: WindowId) -> Option<wayland_server::Client> {
-        self.windows.iter()
+        self.windows
+            .iter()
             .find(|w| w.id == id)
             .and_then(|w| w.wl_surface.client())
     }
-    
+
     pub fn focus_next(&mut self) {
-        let workspace_windows: Vec<WindowId> = self.windows.iter()
+        let workspace_windows: Vec<WindowId> = self
+            .windows
+            .iter()
             .filter(|w| w.workspace == self.active_workspace && w.mapped)
             .map(|w| w.id)
             .collect();
-        
+
         if workspace_windows.is_empty() {
             return;
         }
-        
-        let current_idx = self.focused_window
+
+        let current_idx = self
+            .focused_window
             .and_then(|id| workspace_windows.iter().position(|&wid| wid == id))
             .unwrap_or(0);
-        
+
         let next_idx = (current_idx + 1) % workspace_windows.len();
         let next_id = workspace_windows[next_idx];
-        
+
         self.set_focus(next_id);
     }
-    
+
     pub fn focus_prev(&mut self) {
-        let workspace_windows: Vec<WindowId> = self.windows.iter()
+        let workspace_windows: Vec<WindowId> = self
+            .windows
+            .iter()
             .filter(|w| w.workspace == self.active_workspace && w.mapped)
             .map(|w| w.id)
             .collect();
-        
+
         if workspace_windows.is_empty() {
             return;
         }
-        
-        let current_idx = self.focused_window
+
+        let current_idx = self
+            .focused_window
             .and_then(|id| workspace_windows.iter().position(|&wid| wid == id))
             .unwrap_or(0);
-        
+
         let prev_idx = if current_idx == 0 {
             workspace_windows.len() - 1
         } else {
             current_idx - 1
         };
         let prev_id = workspace_windows[prev_idx];
-        
+
         self.set_focus(prev_id);
     }
-    
+
     pub fn switch_workspace(&mut self, workspace: usize) {
         if workspace < 1 || workspace > self.workspace_count {
             return;
         }
-        
+
         self.active_workspace = workspace;
-        
-        let first_window = self.windows.iter()
+
+        let first_window = self
+            .windows
+            .iter()
             .find(|w| w.workspace == workspace && w.mapped)
             .map(|w| w.id);
-        
+
         if let Some(id) = first_window {
             self.set_focus(id);
         } else {
             self.focused_window = None;
         }
-        
+
         self.needs_relayout = true;
         self.damage_tracker.mark_full_damage();
         log::debug!("Switched to workspace {}", workspace);
     }
-    
+
     pub fn move_window_to_workspace(&mut self, window_id: WindowId, workspace: usize) {
         if workspace < 1 || workspace > self.workspace_count {
             return;
         }
-        
+
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             window.workspace = workspace;
             self.needs_relayout = true;
             self.damage_tracker.mark_full_damage();
         }
     }
-    
+
     pub fn swap_window_next(&mut self) {
         let active_workspace = self.active_workspace;
         let focused_id = match self.focused_window {
             Some(id) => id,
             None => return,
         };
-        
-        let workspace_windows: Vec<WindowId> = self.windows.iter()
+
+        let workspace_windows: Vec<WindowId> = self
+            .windows
+            .iter()
             .filter(|w| w.workspace == active_workspace && w.mapped)
             .map(|w| w.id)
             .collect();
-        
+
         if workspace_windows.len() < 2 {
             return;
         }
-        
+
         let current_idx = match workspace_windows.iter().position(|&id| id == focused_id) {
             Some(idx) => idx,
             None => return,
         };
-        
+
         let next_idx = (current_idx + 1) % workspace_windows.len();
         let next_id = workspace_windows[next_idx];
-        
+
         let (current_pos, next_pos) = {
-            let current = self.windows.iter().position(|w| w.id == focused_id).unwrap();
+            let current = self
+                .windows
+                .iter()
+                .position(|w| w.id == focused_id)
+                .unwrap();
             let next = self.windows.iter().position(|w| w.id == next_id).unwrap();
             (current, next)
         };
-        
+
         self.windows.swap(current_pos, next_pos);
         self.needs_relayout = true;
         self.damage_tracker.mark_full_damage();
     }
-    
+
     pub fn swap_window_prev(&mut self) {
         let active_workspace = self.active_workspace;
         let focused_id = match self.focused_window {
             Some(id) => id,
             None => return,
         };
-        
-        let workspace_windows: Vec<WindowId> = self.windows.iter()
+
+        let workspace_windows: Vec<WindowId> = self
+            .windows
+            .iter()
             .filter(|w| w.workspace == active_workspace && w.mapped)
             .map(|w| w.id)
             .collect();
-        
+
         if workspace_windows.len() < 2 {
             return;
         }
-        
+
         let current_idx = match workspace_windows.iter().position(|&id| id == focused_id) {
             Some(idx) => idx,
             None => return,
         };
-        
+
         let prev_idx = if current_idx == 0 {
             workspace_windows.len() - 1
         } else {
             current_idx - 1
         };
         let prev_id = workspace_windows[prev_idx];
-        
+
         let (current_pos, prev_pos) = {
-            let current = self.windows.iter().position(|w| w.id == focused_id).unwrap();
+            let current = self
+                .windows
+                .iter()
+                .position(|w| w.id == focused_id)
+                .unwrap();
             let prev = self.windows.iter().position(|w| w.id == prev_id).unwrap();
             (current, prev)
         };
-        
+
         self.windows.swap(current_pos, prev_pos);
         self.needs_relayout = true;
         self.damage_tracker.mark_full_damage();
     }
-    
+
     pub fn toggle_fullscreen(&mut self, window_id: WindowId) {
-        let is_fullscreen = self.windows.iter()
+        let is_fullscreen = self
+            .windows
+            .iter()
             .find(|w| w.id == window_id)
             .map(|w| w.fullscreen)
             .unwrap_or(false);
         self.set_fullscreen(window_id, !is_fullscreen);
     }
-    
+
     pub fn set_fullscreen(&mut self, window_id: WindowId, fullscreen: bool) {
         let (screen_width, screen_height) = self.screen_size();
-        
+
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             if fullscreen && !window.fullscreen {
                 window.saved_geometry = Some(window.geometry);
@@ -1426,18 +1579,20 @@ impl State {
             window.needs_redraw = true;
             self.damage_tracker.mark_full_damage();
         }
-        
+
         self.send_window_configure(window_id);
     }
-    
+
     pub fn toggle_floating(&mut self, window_id: WindowId) {
-        let is_floating = self.windows.iter()
+        let is_floating = self
+            .windows
+            .iter()
             .find(|w| w.id == window_id)
             .map(|w| w.floating)
             .unwrap_or(false);
         self.set_floating(window_id, !is_floating);
     }
-    
+
     pub fn set_floating(&mut self, window_id: WindowId, floating: bool) {
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             if floating && !window.floating {
@@ -1447,22 +1602,24 @@ impl State {
             }
             window.needs_redraw = true;
         }
-        
+
         self.needs_relayout = true;
         self.damage_tracker.mark_full_damage();
     }
-    
+
     pub fn toggle_maximize(&mut self, window_id: WindowId) {
-        let is_maximized = self.windows.iter()
+        let is_maximized = self
+            .windows
+            .iter()
             .find(|w| w.id == window_id)
             .map(|w| w.maximized)
             .unwrap_or(false);
         self.set_maximize(window_id, !is_maximized);
     }
-    
+
     pub fn set_maximize(&mut self, window_id: WindowId, maximized: bool) {
         let (screen_width, screen_height) = self.screen_size();
-        
+
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             if maximized && !window.maximized {
                 window.saved_geometry = Some(window.geometry);
@@ -1483,18 +1640,23 @@ impl State {
             window.needs_redraw = true;
             self.damage_tracker.mark_full_damage();
         }
-        
+
         self.send_window_configure(window_id);
     }
-    
-    pub fn resize_window(&mut self, window_id: WindowId, direction: crate::config::ResizeDirection, amount: i32) {
+
+    pub fn resize_window(
+        &mut self,
+        window_id: WindowId,
+        direction: crate::config::ResizeDirection,
+        amount: i32,
+    ) {
         use crate::config::ResizeDirection;
-        
+
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             if window.fullscreen || window.maximized {
                 return;
             }
-            
+
             match direction {
                 ResizeDirection::Grow => {
                     window.geometry.width += amount;
@@ -1519,50 +1681,60 @@ impl State {
                     window.geometry.height += amount;
                 }
             }
-            
+
             window.geometry.width = window.geometry.width.max(100);
             window.geometry.height = window.geometry.height.max(100);
             window.needs_redraw = true;
             self.damage_tracker.mark_full_damage();
         }
-        
+
         self.send_window_configure(window_id);
     }
-    
+
     fn send_window_configure(&mut self, window_id: WindowId) {
         let (geometry, xdg_surface, xdg_toplevel) = {
             let window = match self.windows.iter().find(|w| w.id == window_id) {
                 Some(w) => w,
                 None => return,
             };
-            (window.geometry, window.xdg_surface.clone(), window.xdg_toplevel.clone())
+            (
+                window.geometry,
+                window.xdg_surface.clone(),
+                window.xdg_toplevel.clone(),
+            )
         };
-        
+
         let states = self.get_toplevel_states(window_id);
         let serial = self.next_keyboard_serial();
-        
-        let title_bar_height = if self.windows.iter().find(|w| w.id == window_id).map(|w| w.fullscreen).unwrap_or(false) {
+
+        let title_bar_height = if self
+            .windows
+            .iter()
+            .find(|w| w.id == window_id)
+            .map(|w| w.fullscreen)
+            .unwrap_or(false)
+        {
             0
         } else {
             self.config.title_bar_height()
         };
-        
+
         let client_height = (geometry.height - title_bar_height).max(1);
         xdg_toplevel.configure(geometry.width, client_height, states);
         xdg_surface.configure(serial);
     }
-    
+
     #[allow(dead_code)]
     pub fn set_window_title(&mut self, window_id: WindowId, title: String) {
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             window.title = title;
         }
     }
-    
+
     pub fn set_focus(&mut self, window_id: WindowId) {
         self.set_focus_without_relayout(window_id);
     }
-    
+
     #[allow(dead_code)]
     fn send_configure_to_window(&mut self, window_id: WindowId) {
         if let Some(window) = self.windows.iter().find(|w| w.id == window_id) {
@@ -1571,39 +1743,39 @@ impl State {
             let xdg_toplevel = window.xdg_toplevel.clone();
             let states = self.get_toplevel_states(window_id);
             let serial = self.next_keyboard_serial();
-            
+
             xdg_toplevel.configure(geometry.width, geometry.height, states);
             xdg_surface.configure(serial);
         }
     }
-    
+
     pub fn set_focus_without_relayout(&mut self, window_id: WindowId) {
         let old_focused = self.focused_window;
-        
+
         if old_focused == Some(window_id) {
             return;
         }
-        
+
         if let Some(old_id) = old_focused {
             if let Some(old_win) = self.windows.iter_mut().find(|w| w.id == old_id) {
                 old_win.needs_redraw = true;
                 self.damage_tracker.add_damage(old_win.geometry);
             }
         }
-        
+
         self.focused_window = Some(window_id);
-        
+
         if let Some(new_win) = self.windows.iter_mut().find(|w| w.id == window_id) {
             new_win.needs_redraw = true;
             self.damage_tracker.add_damage(new_win.geometry);
         }
-        
+
         if let Some(old_id) = old_focused {
             if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
                 let old_surface = old_window.wl_surface.clone();
                 let old_client = old_window.wl_surface.client();
                 let serial = self.next_keyboard_serial();
-                
+
                 for keyboard in self.keyboards.iter() {
                     if keyboard.client() == old_client {
                         keyboard.leave(serial, &old_surface);
@@ -1611,14 +1783,16 @@ impl State {
                 }
             }
         }
-        
-        let new_window_info = self.windows.iter()
+
+        let new_window_info = self
+            .windows
+            .iter()
             .find(|w| w.id == window_id)
             .map(|w| (w.wl_surface.clone(), w.wl_surface.client()));
-        
+
         if let Some((surface, Some(new_client))) = new_window_info {
             let serial = self.next_keyboard_serial();
-            
+
             for keyboard in self.keyboards.iter() {
                 if keyboard.client().as_ref() == Some(&new_client) {
                     keyboard.enter(serial, &surface, vec![]);
@@ -1627,15 +1801,17 @@ impl State {
             }
         }
     }
-    
+
     pub fn focus_layer_surface(&mut self, surface_id: wayland_server::backend::ObjectId) {
-        let ls_info = self.layer_surfaces.iter()
+        let ls_info = self
+            .layer_surfaces
+            .iter()
             .find(|ls| ls.wl_surface.id() == surface_id)
             .map(|ls| (ls.wl_surface.clone(), ls.wl_surface.client()));
-        
+
         if let Some((surface, Some(client))) = ls_info {
             let serial = self.next_keyboard_serial();
-            
+
             for keyboard in self.keyboards.iter() {
                 if keyboard.client().as_ref() == Some(&client) {
                     keyboard.enter(serial, &surface, vec![]);
@@ -1644,19 +1820,29 @@ impl State {
             }
         }
     }
-    
+
     pub fn add_shm_pool(&mut self, pool: &WlShmPool, fd: OwnedFd, size: i32) {
         let id = pool.id();
-        self.shm_pools.insert(id, ShmPoolData { fd, size, mmap_ptr: None });
+        self.shm_pools.insert(
+            id,
+            ShmPoolData {
+                fd,
+                size,
+                mmap_ptr: None,
+            },
+        );
     }
-    
+
     pub fn resize_shm_pool(&mut self, pool: &WlShmPool, new_size: i32) {
         let id = pool.id();
         if let Some(pool_data) = self.shm_pools.get_mut(&id) {
             if new_size > pool_data.size {
                 if let Some(old_ptr) = pool_data.mmap_ptr.take() {
                     unsafe {
-                        libc::munmap(old_ptr.as_ptr() as *mut libc::c_void, pool_data.size as usize);
+                        libc::munmap(
+                            old_ptr.as_ptr() as *mut libc::c_void,
+                            pool_data.size as usize,
+                        );
                     }
                 }
                 pool_data.size = new_size;
@@ -1664,22 +1850,33 @@ impl State {
             }
         }
     }
-    
+
     #[allow(clippy::too_many_arguments)]
-    pub fn add_buffer(&mut self, buffer: &WlBuffer, pool: &WlShmPool, offset: i32, 
-                      width: i32, height: i32, stride: i32, format: u32) {
+    pub fn add_buffer(
+        &mut self,
+        buffer: &WlBuffer,
+        pool: &WlShmPool,
+        offset: i32,
+        width: i32,
+        height: i32,
+        stride: i32,
+        format: u32,
+    ) {
         let buffer_id = buffer.id();
         let pool_id = pool.id();
-        self.buffers.insert(buffer_id, BufferData {
-            pool_id,
-            offset,
-            width,
-            height,
-            stride,
-            format,
-        });
+        self.buffers.insert(
+            buffer_id,
+            BufferData {
+                pool_id,
+                offset,
+                width,
+                height,
+                stride,
+                format,
+            },
+        );
     }
-    
+
     #[allow(dead_code)]
     pub fn get_buffer_pixels(&mut self, buffer: &WlBuffer) -> Option<(&[u32], usize)> {
         let buffer_id = buffer.id();
@@ -1688,9 +1885,9 @@ impl State {
         let offset = buffer_data.offset;
         let height = buffer_data.height;
         let stride = buffer_data.stride;
-        
+
         let pool_data = self.shm_pools.get_mut(&pool_id)?;
-        
+
         if pool_data.mmap_ptr.is_none() {
             unsafe {
                 let ptr = libc::mmap(
@@ -1701,26 +1898,29 @@ impl State {
                     pool_data.fd.as_fd().as_raw_fd(),
                     0,
                 );
-                
+
                 if ptr == libc::MAP_FAILED {
                     return None;
                 }
-                
+
                 pool_data.mmap_ptr = NonNull::new(ptr as *mut u8);
             }
         }
-        
+
         let mmap_ptr = pool_data.mmap_ptr?;
         let stride_pixels = (stride / 4) as usize;
-        
+
         unsafe {
             let buffer_start = mmap_ptr.as_ptr().add(offset as usize) as *const u32;
             let pixel_count = stride_pixels * height as usize;
-            
-            Some((std::slice::from_raw_parts(buffer_start, pixel_count), stride_pixels))
+
+            Some((
+                std::slice::from_raw_parts(buffer_start, pixel_count),
+                stride_pixels,
+            ))
         }
     }
-    
+
     pub fn update_window_pixel_cache(&mut self, window_id: WindowId) -> bool {
         let (buffer_id, buf_width, buf_height, expected_width, expected_height) = {
             let window = match self.windows.iter().find(|w| w.id == window_id) {
@@ -1739,26 +1939,32 @@ impl State {
             let expected_w = window.geometry.width;
             let title_bar_height = self.config.title_bar_height();
             let expected_h = (window.geometry.height - title_bar_height).max(1);
-            (buffer_id, buffer_data.width as usize, buffer_data.height as usize, expected_w, expected_h)
+            (
+                buffer_id,
+                buffer_data.width as usize,
+                buffer_data.height as usize,
+                expected_w,
+                expected_h,
+            )
         };
-        
+
         let min_width = (expected_width / 2).max(10) as usize;
         let min_height = (expected_height / 2).max(10) as usize;
-        
+
         if buf_width < min_width || buf_height < min_height {
             return false;
         }
-        
+
         let buffer_data = match self.buffers.get(&buffer_id) {
             Some(d) => d,
             None => return false,
         };
-        
+
         let pool_data = match self.shm_pools.get_mut(&buffer_data.pool_id) {
             Some(p) => p,
             None => return false,
         };
-        
+
         if pool_data.mmap_ptr.is_none() {
             unsafe {
                 let ptr = libc::mmap(
@@ -1769,57 +1975,63 @@ impl State {
                     pool_data.fd.as_fd().as_raw_fd(),
                     0,
                 );
-                
+
                 if ptr == libc::MAP_FAILED {
                     return false;
                 }
-                
+
                 pool_data.mmap_ptr = NonNull::new(ptr as *mut u8);
             }
         }
-        
+
         let mmap_ptr = match pool_data.mmap_ptr {
             Some(p) => p,
             None => return false,
         };
-        
+
         let stride_pixels = (buffer_data.stride / 4) as usize;
         let pixel_count = stride_pixels * buf_height;
         let byte_count = pixel_count * 4;
         let end_offset = buffer_data.offset as usize + byte_count;
-        
+
         if end_offset > pool_data.size as usize {
             log::warn!(
                 "[cache] Buffer exceeds pool bounds: offset={} + size={} > pool_size={}",
-                buffer_data.offset, byte_count, pool_data.size
+                buffer_data.offset,
+                byte_count,
+                pool_data.size
             );
             return false;
         }
-        
+
         let window = match self.windows.iter_mut().find(|w| w.id == window_id) {
             Some(w) => w,
             None => return false,
         };
-        
+
         if window.pixel_cache.len() < pixel_count {
             window.pixel_cache.resize(pixel_count, 0);
         }
-        
+
         unsafe {
             let src = mmap_ptr.as_ptr().add(buffer_data.offset as usize) as *const u32;
             std::ptr::copy_nonoverlapping(src, window.pixel_cache.as_mut_ptr(), pixel_count);
         }
-        
+
         window.cache_width = buf_width;
         window.cache_height = buf_height;
         window.cache_stride = stride_pixels;
-        
+
         true
     }
-    
+
     pub fn update_layer_surface_pixel_cache(&mut self, layer_surface_id: LayerSurfaceId) -> bool {
         let (buffer_id, buf_width, buf_height) = {
-            let ls = match self.layer_surfaces.iter().find(|ls| ls.id == layer_surface_id) {
+            let ls = match self
+                .layer_surfaces
+                .iter()
+                .find(|ls| ls.id == layer_surface_id)
+            {
                 Some(ls) => ls,
                 None => return false,
             };
@@ -1832,19 +2044,23 @@ impl State {
                 Some(d) => d,
                 None => return false,
             };
-            (buffer_id, buffer_data.width as usize, buffer_data.height as usize)
+            (
+                buffer_id,
+                buffer_data.width as usize,
+                buffer_data.height as usize,
+            )
         };
-        
+
         let buffer_data = match self.buffers.get(&buffer_id) {
             Some(d) => d,
             None => return false,
         };
-        
+
         let pool_data = match self.shm_pools.get_mut(&buffer_data.pool_id) {
             Some(p) => p,
             None => return false,
         };
-        
+
         if pool_data.mmap_ptr.is_none() {
             unsafe {
                 let ptr = libc::mmap(
@@ -1855,25 +2071,25 @@ impl State {
                     pool_data.fd.as_fd().as_raw_fd(),
                     0,
                 );
-                
+
                 if ptr == libc::MAP_FAILED {
                     return false;
                 }
-                
+
                 pool_data.mmap_ptr = NonNull::new(ptr as *mut u8);
             }
         }
-        
+
         let mmap_ptr = match pool_data.mmap_ptr {
             Some(p) => p,
             None => return false,
         };
-        
+
         let stride_pixels = (buffer_data.stride / 4) as usize;
         let pixel_count = stride_pixels * buf_height;
         let byte_count = pixel_count * 4;
         let end_offset = buffer_data.offset as usize + byte_count;
-        
+
         if end_offset > pool_data.size as usize {
             log::warn!(
                 "[cache] Layer surface buffer exceeds pool bounds: offset={} + size={} > pool_size={}",
@@ -1881,62 +2097,71 @@ impl State {
             );
             return false;
         }
-        
-        let ls = match self.layer_surfaces.iter_mut().find(|ls| ls.id == layer_surface_id) {
+
+        let ls = match self
+            .layer_surfaces
+            .iter_mut()
+            .find(|ls| ls.id == layer_surface_id)
+        {
             Some(ls) => ls,
             None => return false,
         };
-        
+
         if ls.pixel_cache.len() < pixel_count {
             ls.pixel_cache.resize(pixel_count, 0);
         }
-        
+
         unsafe {
             let src = mmap_ptr.as_ptr().add(buffer_data.offset as usize) as *const u32;
             std::ptr::copy_nonoverlapping(src, ls.pixel_cache.as_mut_ptr(), pixel_count);
         }
-        
+
         ls.cache_width = buf_width;
         ls.cache_height = buf_height;
         ls.cache_stride = stride_pixels;
-        
+
         true
     }
-    
+
     pub fn get_focused_keyboards(&self) -> Vec<WlKeyboard> {
         use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::KeyboardInteractivity;
-        
+
         for ls in &self.layer_surfaces {
             if ls.mapped && ls.keyboard_interactivity == KeyboardInteractivity::Exclusive {
                 if let Some(client) = ls.wl_surface.client() {
-                    return self.keyboards.iter()
+                    return self
+                        .keyboards
+                        .iter()
                         .filter(|kb| kb.client().as_ref() == Some(&client))
                         .cloned()
                         .collect();
                 }
             }
         }
-        
+
         let focused_id = match self.focused_window {
             Some(id) => id,
             None => return vec![],
         };
-        
-        let focused_client = self.windows.iter()
+
+        let focused_client = self
+            .windows
+            .iter()
             .find(|w| w.id == focused_id)
             .and_then(|w| w.wl_surface.client());
-        
+
         let focused_client = match focused_client {
             Some(c) => c,
             None => return vec![],
         };
-        
-        self.keyboards.iter()
+
+        self.keyboards
+            .iter()
             .filter(|kb| kb.client().as_ref() == Some(&focused_client))
             .cloned()
             .collect()
     }
-    
+
     pub fn window_at(&self, x: f64, y: f64) -> Option<WindowId> {
         let title_bar_height = self.config.title_bar_height();
         for window in self.windows.iter().rev() {
@@ -1945,14 +2170,17 @@ impl State {
             }
             let g = window.geometry;
             let content_y = g.y + title_bar_height;
-            if x >= g.x as f64 && x < (g.x + g.width) as f64 &&
-               y >= g.y as f64 && y < (content_y + g.height - title_bar_height) as f64 {
+            if x >= g.x as f64
+                && x < (g.x + g.width) as f64
+                && y >= g.y as f64
+                && y < (content_y + g.height - title_bar_height) as f64
+            {
                 return Some(window.id);
             }
         }
         None
     }
-    
+
     pub fn handle_pointer_motion(&mut self, x: f64, y: f64) {
         let old_x = self.cursor_x;
         let old_y = self.cursor_y;
@@ -1960,18 +2188,18 @@ impl State {
         self.cursor_y = y as i32;
         self.pointer_x = x;
         self.pointer_y = y;
-        
+
         if self.cursor_visible && (old_x != self.cursor_x || old_y != self.cursor_y) {
             self.last_cursor_pos = (old_x, old_y);
             self.damage_tracker.add_cursor_damage();
         }
-        
+
         let window_id = self.window_at(x, y);
         let title_bar_height = self.config.title_bar_height();
-        
+
         if window_id != self.pointer_focus {
             let serial = self.next_pointer_serial();
-            
+
             if let Some(old_id) = self.pointer_focus {
                 if let Some(old_window) = self.windows.iter().find(|w| w.id == old_id) {
                     let old_client = old_window.wl_surface.client();
@@ -1982,14 +2210,14 @@ impl State {
                     }
                 }
             }
-            
+
             if let Some(new_id) = window_id {
                 if let Some(new_window) = self.windows.iter().find(|w| w.id == new_id) {
                     let new_client = new_window.wl_surface.client();
                     let g = new_window.geometry;
                     let local_x = x - g.x as f64;
                     let local_y = y - (g.y + title_bar_height) as f64;
-                    
+
                     for pointer in &self.pointers {
                         if pointer.client() == new_client {
                             pointer.enter(serial, &new_window.wl_surface, local_x, local_y);
@@ -1997,7 +2225,7 @@ impl State {
                     }
                 }
             }
-            
+
             self.pointer_focus = window_id;
         } else if let Some(win_id) = window_id {
             if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
@@ -2009,7 +2237,7 @@ impl State {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u32;
-                
+
                 for pointer in &self.pointers {
                     if pointer.client() == client {
                         pointer.motion(time, local_x, local_y);
@@ -2018,20 +2246,20 @@ impl State {
             }
         }
     }
-    
+
     pub fn handle_pointer_button(&mut self, button: u32, pressed: bool) {
         let state = if pressed {
             wayland_server::protocol::wl_pointer::ButtonState::Pressed
         } else {
             wayland_server::protocol::wl_pointer::ButtonState::Released
         };
-        
+
         let serial = self.next_pointer_serial();
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u32;
-        
+
         if pressed {
             if let Some(win_id) = self.pointer_focus {
                 if self.focused_window != Some(win_id) {
@@ -2039,7 +2267,7 @@ impl State {
                 }
             }
         }
-        
+
         if let Some(win_id) = self.pointer_focus {
             if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
                 let client = window.wl_surface.client();
@@ -2051,15 +2279,15 @@ impl State {
             }
         }
     }
-    
+
     pub fn handle_pointer_axis(&mut self, horizontal: f64, vertical: f64) {
         use wayland_server::protocol::wl_pointer::Axis;
-        
+
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u32;
-        
+
         if let Some(win_id) = self.pointer_focus {
             if let Some(window) = self.windows.iter().find(|w| w.id == win_id) {
                 let client = window.wl_surface.client();
@@ -2081,11 +2309,21 @@ impl State {
     }
 }
 
-fn calculate_tiling_geometry(index: usize, num_windows: usize, screen_width: i32, screen_height: i32) -> Rectangle {
+fn calculate_tiling_geometry(
+    index: usize,
+    num_windows: usize,
+    screen_width: i32,
+    screen_height: i32,
+) -> Rectangle {
     if num_windows == 0 {
-        return Rectangle { x: 0, y: 0, width: screen_width, height: screen_height };
+        return Rectangle {
+            x: 0,
+            y: 0,
+            width: screen_width,
+            height: screen_height,
+        };
     }
-    
+
     if num_windows == 1 {
         return Rectangle {
             x: 0,
@@ -2094,7 +2332,7 @@ fn calculate_tiling_geometry(index: usize, num_windows: usize, screen_width: i32
             height: screen_height,
         };
     }
-    
+
     if num_windows == 2 {
         let half = screen_width / 2;
         if index == 0 {
@@ -2117,21 +2355,26 @@ fn calculate_tiling_geometry(index: usize, num_windows: usize, screen_width: i32
         let rows = ((num_windows as i32) + cols - 1) / cols;
         let col = (index as i32) % cols;
         let row = (index as i32) / cols;
-        
+
         let base_width = screen_width / cols;
         let base_height = screen_height / rows;
         let extra_width = screen_width % cols;
         let extra_height = screen_height % rows;
-        
+
         let width = base_width + if col < extra_width { 1 } else { 0 };
         let height = base_height + if row < extra_height { 1 } else { 0 };
-        
+
         let x = col * base_width + col.min(extra_width);
         let y = row * base_height + row.min(extra_height);
-        
+
         let width = width.max(100);
         let height = height.max(100);
-        
-        Rectangle { x, y, width, height }
+
+        Rectangle {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }

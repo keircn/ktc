@@ -1,13 +1,13 @@
+use crate::state::State;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Mutex;
-use std::os::fd::{OwnedFd, AsFd, AsRawFd, FromRawFd};
-use wayland_server::{Dispatch, GlobalDispatch, Resource};
 use wayland_protocols::wp::linux_dmabuf::zv1::server::{
-    zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
     zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
+    zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
 };
 use wayland_server::protocol::wl_buffer::WlBuffer;
-use crate::state::State;
+use wayland_server::{Dispatch, GlobalDispatch, Resource};
 
 pub struct DmaBufGlobal;
 
@@ -70,11 +70,11 @@ impl GlobalDispatch<ZwpLinuxDmabufV1, DmaBufGlobal> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         let dmabuf = data_init.init(resource, ());
-        
+
         if dmabuf.version() >= 4 {
             return;
         }
-        
+
         if let Some(ref renderer) = state.gpu_renderer {
             for fmt in &renderer.supported_formats {
                 if dmabuf.version() >= 3 {
@@ -137,9 +137,9 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
             },
         ]
     };
-    
+
     let table_size = formats.len() * std::mem::size_of::<FormatModifierEntry>();
-    
+
     let fd = match create_format_table_fd(&formats) {
         Ok(fd) => fd,
         Err(e) => {
@@ -148,9 +148,9 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
             return;
         }
     };
-    
+
     feedback.format_table(fd.as_fd(), table_size as u32);
-    
+
     let (main_dev, scanout_dev) = if let Some(ref renderer) = state.gpu_renderer {
         (renderer.render_node_dev(), renderer.drm_dev())
     } else {
@@ -170,26 +170,28 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
             .unwrap_or(0);
         (render_dev, card_dev)
     };
-    
+
     let main_dev_bytes = main_dev.to_ne_bytes();
     feedback.main_device(main_dev_bytes.to_vec());
-    
+
     let scanout_dev_bytes = scanout_dev.to_ne_bytes();
     feedback.tranche_target_device(scanout_dev_bytes.to_vec());
     feedback.tranche_flags(zwp_linux_dmabuf_feedback_v1::TrancheFlags::Scanout);
-    
+
     let indices: Vec<u8> = (0..formats.len() as u16)
         .flat_map(|i| i.to_ne_bytes())
         .collect();
     feedback.tranche_formats(indices);
-    
+
     feedback.tranche_done();
     feedback.done();
 }
 
-fn create_format_table_fd(formats: &[crate::renderer::DmaBufFormat]) -> Result<OwnedFd, std::io::Error> {
+fn create_format_table_fd(
+    formats: &[crate::renderer::DmaBufFormat],
+) -> Result<OwnedFd, std::io::Error> {
     use std::io::Write;
-    
+
     let fd = unsafe {
         let fd = libc::memfd_create(
             c"dmabuf-format-table".as_ptr(),
@@ -200,7 +202,7 @@ fn create_format_table_fd(formats: &[crate::renderer::DmaBufFormat]) -> Result<O
         }
         OwnedFd::from_raw_fd(fd)
     };
-    
+
     let mut file = std::fs::File::from(fd.try_clone()?);
     for fmt in formats {
         let entry = FormatModifierEntry {
@@ -216,7 +218,7 @@ fn create_format_table_fd(formats: &[crate::renderer::DmaBufFormat]) -> Result<O
         };
         file.write_all(bytes)?;
     }
-    
+
     unsafe {
         libc::fcntl(
             fd.as_raw_fd(),
@@ -224,7 +226,7 @@ fn create_format_table_fd(formats: &[crate::renderer::DmaBufFormat]) -> Result<O
             libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE,
         );
     }
-    
+
     Ok(fd)
 }
 
@@ -253,9 +255,16 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
         data_init: &mut wayland_server::DataInit<'_, Self>,
     ) {
         match request {
-            zwp_linux_buffer_params_v1::Request::Add { fd, plane_idx, offset, stride, modifier_hi, modifier_lo } => {
+            zwp_linux_buffer_params_v1::Request::Add {
+                fd,
+                plane_idx,
+                offset,
+                stride,
+                modifier_hi,
+                modifier_lo,
+            } => {
                 let mut inner = data.inner.lock().unwrap();
-                
+
                 inner.planes.push(DmaBufPlane {
                     fd,
                     plane_idx,
@@ -265,52 +274,62 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                     modifier_lo,
                 });
             }
-            zwp_linux_buffer_params_v1::Request::Create { width, height, format, .. } => {
+            zwp_linux_buffer_params_v1::Request::Create {
+                width,
+                height,
+                format,
+                ..
+            } => {
                 let mut inner = data.inner.lock().unwrap();
                 inner.width = width;
                 inner.height = height;
                 inner.format = format;
-                
+
                 let planes = std::mem::take(&mut inner.planes);
-                
+
                 if planes.is_empty() {
                     resource.failed();
                     return;
                 }
-                
+
                 let buffer_data = DmaBufBufferData {
                     width,
                     height,
                     format,
                     planes,
                 };
-                
+
                 let client = resource.client().unwrap();
                 let buffer: WlBuffer = client
-                    .create_resource::<WlBuffer, DmaBufBufferData, Self>(
-                        dhandle,
-                        1,
-                        buffer_data,
-                    )
+                    .create_resource::<WlBuffer, DmaBufBufferData, Self>(dhandle, 1, buffer_data)
                     .unwrap();
-                
+
                 if let Some(data) = buffer.data::<DmaBufBufferData>() {
                     if let Some(plane) = data.planes.first() {
-                        let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
+                        let modifier =
+                            ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
                         let dup_fd = plane.fd.try_clone().expect("Failed to dup dmabuf fd");
-                        
-                        let planes: Vec<crate::state::DmaBufPlaneInfo> = data.planes.iter().map(|p| {
-                            crate::state::DmaBufPlaneInfo {
+
+                        let planes: Vec<crate::state::DmaBufPlaneInfo> = data
+                            .planes
+                            .iter()
+                            .map(|p| crate::state::DmaBufPlaneInfo {
                                 fd: p.fd.try_clone().expect("Failed to dup plane fd"),
                                 offset: p.offset,
                                 stride: p.stride,
                                 modifier: ((p.modifier_hi as u64) << 32) | (p.modifier_lo as u64),
-                            }
-                        }).collect();
-                        
-                        log::debug!("[dmabuf] Created buffer: {}x{} format={:#x} modifier={:#x} planes={}",
-                            data.width, data.height, data.format, modifier, planes.len());
-                        
+                            })
+                            .collect();
+
+                        log::debug!(
+                            "[dmabuf] Created buffer: {}x{} format={:#x} modifier={:#x} planes={}",
+                            data.width,
+                            data.height,
+                            data.format,
+                            modifier,
+                            planes.len()
+                        );
+
                         let info = crate::state::DmaBufBufferInfo {
                             width: data.width,
                             height: data.height,
@@ -324,43 +343,52 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                         state.dmabuf_buffers.insert(buffer.id(), info);
                     }
                 }
-                
+
                 resource.created(&buffer);
             }
-            zwp_linux_buffer_params_v1::Request::CreateImmed { buffer_id, width, height, format, .. } => {
+            zwp_linux_buffer_params_v1::Request::CreateImmed {
+                buffer_id,
+                width,
+                height,
+                format,
+                ..
+            } => {
                 let mut inner = data.inner.lock().unwrap();
                 inner.width = width;
                 inner.height = height;
                 inner.format = format;
-                
+
                 let planes = std::mem::take(&mut inner.planes);
-                
+
                 let buffer_data = DmaBufBufferData {
                     width,
                     height,
                     format,
                     planes,
                 };
-                
+
                 let buffer: WlBuffer = data_init.init(buffer_id, buffer_data);
-                
+
                 if let Some(data) = buffer.data::<DmaBufBufferData>() {
                     if let Some(plane) = data.planes.first() {
-                        let modifier = ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
+                        let modifier =
+                            ((plane.modifier_hi as u64) << 32) | (plane.modifier_lo as u64);
                         let dup_fd = plane.fd.try_clone().expect("Failed to dup dmabuf fd");
-                        
-                        let planes: Vec<crate::state::DmaBufPlaneInfo> = data.planes.iter().map(|p| {
-                            crate::state::DmaBufPlaneInfo {
+
+                        let planes: Vec<crate::state::DmaBufPlaneInfo> = data
+                            .planes
+                            .iter()
+                            .map(|p| crate::state::DmaBufPlaneInfo {
                                 fd: p.fd.try_clone().expect("Failed to dup plane fd"),
                                 offset: p.offset,
                                 stride: p.stride,
                                 modifier: ((p.modifier_hi as u64) << 32) | (p.modifier_lo as u64),
-                            }
-                        }).collect();
-                        
+                            })
+                            .collect();
+
                         log::debug!("[dmabuf] CreateImmed buffer: {}x{} format={:#x} modifier={:#x} planes={} buffer_id={:?}",
                             data.width, data.height, data.format, modifier, planes.len(), buffer.id());
-                        
+
                         let info = crate::state::DmaBufBufferInfo {
                             width: data.width,
                             height: data.height,
@@ -372,7 +400,11 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmaBufParamsData> for State {
                             planes,
                         };
                         state.dmabuf_buffers.insert(buffer.id(), info);
-                        log::debug!("[dmabuf] Registered buffer {:?}, total dmabuf_buffers={}", buffer.id(), state.dmabuf_buffers.len());
+                        log::debug!(
+                            "[dmabuf] Registered buffer {:?}, total dmabuf_buffers={}",
+                            buffer.id(),
+                            state.dmabuf_buffers.len()
+                        );
                     }
                 }
             }

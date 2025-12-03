@@ -1,12 +1,12 @@
-use wayland_server::{GlobalDispatch, Dispatch, Resource};
+use crate::state::State;
 use wayland_protocols::xdg::shell::server::{
-    xdg_wm_base::{self, XdgWmBase},
-    xdg_surface::{self, XdgSurface},
-    xdg_toplevel::{self, XdgToplevel},
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{self, XdgPositioner},
+    xdg_surface::{self, XdgSurface},
+    xdg_toplevel::{self, XdgToplevel},
+    xdg_wm_base::{self, XdgWmBase},
 };
-use crate::state::State;
+use wayland_server::{Dispatch, GlobalDispatch, Resource};
 
 impl GlobalDispatch<XdgWmBase, ()> for State {
     fn bind(
@@ -38,7 +38,9 @@ impl Dispatch<XdgWmBase, ()> for State {
             xdg_wm_base::Request::GetXdgSurface { id, surface } => {
                 let xdg_surface = data_init.init(id, ());
                 let xdg_id = xdg_surface.id().protocol_id();
-                state.pending_xdg_surfaces.insert(xdg_id, (xdg_surface, surface));
+                state
+                    .pending_xdg_surfaces
+                    .insert(xdg_id, (xdg_surface, surface));
             }
             _ => {}
         }
@@ -54,7 +56,8 @@ impl Dispatch<XdgPositioner, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<XdgSurface, ()> for State {
@@ -70,19 +73,25 @@ impl Dispatch<XdgSurface, ()> for State {
         match request {
             xdg_surface::Request::GetToplevel { id } => {
                 let toplevel = data_init.init(id, ());
-                
+
                 let xdg_id = resource.id().protocol_id();
-                if let Some((xdg_surface, wl_surface)) = state.pending_xdg_surfaces.remove(&xdg_id) {
-                    let window_id = state.add_window_without_relayout(xdg_surface, toplevel.clone(), wl_surface);
+                if let Some((xdg_surface, wl_surface)) = state.pending_xdg_surfaces.remove(&xdg_id)
+                {
+                    let window_id = state.add_window_without_relayout(
+                        xdg_surface,
+                        toplevel.clone(),
+                        wl_surface,
+                    );
                     log::info!("Window {} created", window_id);
-                    
+
                     let tiling_states = state.get_toplevel_states(window_id);
-                    let (geometry_width, geometry_height) = if let Some(window) = state.get_window_mut(window_id) {
-                        (window.geometry.width, window.geometry.height)
-                    } else {
-                        state.screen_size()
-                    };
-                    
+                    let (geometry_width, geometry_height) =
+                        if let Some(window) = state.get_window_mut(window_id) {
+                            (window.geometry.width, window.geometry.height)
+                        } else {
+                            state.screen_size()
+                        };
+
                     toplevel.configure(geometry_width, geometry_height, tiling_states);
                     let serial = state.next_keyboard_serial();
                     resource.configure(serial);
@@ -112,12 +121,16 @@ impl Dispatch<XdgToplevel, ()> for State {
     ) {
         match request {
             xdg_toplevel::Request::SetTitle { title } => {
-                if let Some(window) = state.windows.iter_mut().find(|w| w.xdg_toplevel.id() == resource.id()) {
+                if let Some(window) = state
+                    .windows
+                    .iter_mut()
+                    .find(|w| w.xdg_toplevel.id() == resource.id())
+                {
                     let old_title = window.title.clone();
                     window.title = title.clone();
                     let window_id = window.id;
                     let is_focused = state.focused_window == Some(window_id);
-                    
+
                     if is_focused && old_title != title {
                         state.pending_title_change = Some(title);
                     }
@@ -149,5 +162,6 @@ impl Dispatch<XdgPopup, ()> for State {
         _data: &(),
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, Self>,
-    ) {}
+    ) {
+    }
 }
