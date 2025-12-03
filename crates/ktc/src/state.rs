@@ -1748,7 +1748,7 @@ impl State {
         }
         
         let buffer_data = match self.buffers.get(&buffer_id) {
-            Some(d) => d.clone(),
+            Some(d) => d,
             None => return false,
         };
         
@@ -1834,7 +1834,7 @@ impl State {
         };
         
         let buffer_data = match self.buffers.get(&buffer_id) {
-            Some(d) => d.clone(),
+            Some(d) => d,
             None => return false,
         };
         
