@@ -45,6 +45,7 @@ struct DmaBufParamsInner {
 
 pub struct DmaBufPlane {
     pub fd: OwnedFd,
+    #[allow(dead_code)]
     pub plane_idx: u32,
     pub offset: u32,
     pub stride: u32,

@@ -377,10 +377,11 @@ impl InputHandler {
 
 fn keysym_to_lower(keysym: u32) -> u32 {
     use xkbcommon::xkb::keysyms::*;
-    if keysym >= KEY_A && keysym <= KEY_Z {
+    if (KEY_A..=KEY_Z).contains(&keysym) {
         return keysym + (KEY_a - KEY_A);
     }
     
+    #[allow(non_upper_case_globals)]
     match keysym {
         KEY_exclam => KEY_1,
         KEY_at => KEY_2,

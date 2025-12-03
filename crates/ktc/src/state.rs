@@ -723,6 +723,7 @@ pub struct BufferData {
     pub width: i32,
     pub height: i32,
     pub stride: i32,
+    #[allow(dead_code)]
     pub format: u32,
 }
 
@@ -922,7 +923,7 @@ impl State {
             
             for wl_output in &output.wl_outputs {
                 if wl_output.version() >= 2 {
-                    wl_output.scale(output.scale.max(1) as i32);
+                    wl_output.scale(output.scale.max(1));
                 }
                 wl_output.geometry(
                     output.x,
@@ -1551,6 +1552,7 @@ impl State {
         xdg_surface.configure(serial);
     }
     
+    #[allow(dead_code)]
     pub fn set_window_title(&mut self, window_id: WindowId, title: String) {
         if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
             window.title = title;

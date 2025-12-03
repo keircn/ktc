@@ -382,6 +382,7 @@ pub struct DisplayConfig {
     pub gpu: bool,
     
     #[serde(default = "default_renderer")]
+    #[allow(dead_code)]
     pub renderer: String,
 }
 
@@ -548,6 +549,7 @@ impl KeybindsConfig {
             .collect()
     }
     
+    #[allow(dead_code)]
     pub fn get_all_bindings_raw(&self) -> Vec<(String, Keybind)> {
         self.bind.iter()
             .filter_map(|entry| {

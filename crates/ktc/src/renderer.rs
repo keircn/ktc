@@ -766,6 +766,7 @@ impl GpuRenderer {
         }
     }
     
+    #[allow(clippy::too_many_arguments)]
     pub fn import_dmabuf_texture(
         &mut self,
         id: u64,
@@ -994,6 +995,7 @@ impl GpuRenderer {
         Some(texture)
     }
     
+    #[allow(dead_code)]
     pub fn get_dmabuf_texture(&self, id: u64) -> Option<glow::Texture> {
         self.dmabuf_textures.get(&id).map(|(tex, _, _)| *tex)
     }

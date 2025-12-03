@@ -117,6 +117,7 @@ impl Dispatch<ZwlrLayerShellV1, ()> for State {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct LayerSurfaceData {
     pub surface: WlSurface,
     pub namespace: String,
@@ -277,6 +278,7 @@ impl State {
         self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id)
     }
 
+    #[allow(dead_code)]
     pub fn map_layer_surface(&mut self, surface_id: wayland_server::backend::ObjectId) {
         if let Some(ls) = self.layer_surfaces.iter_mut().find(|ls| ls.wl_surface.id() == surface_id) {
             if !ls.mapped {
@@ -287,6 +289,7 @@ impl State {
         }
     }
 
+    #[allow(dead_code)]
     pub fn layer_surfaces_by_layer(&self, layer: Layer) -> impl Iterator<Item = &LayerSurface> {
         self.layer_surfaces.iter().filter(move |ls| ls.layer == layer && ls.mapped)
     }
