@@ -150,6 +150,8 @@ pub struct GpuRenderer {
     dmabuf_textures: HashMap<u64, (glow::Texture, egl::Image, bool)>,
 
     pub supported_formats: Vec<DmaBufFormat>,
+
+    has_unpack_subimage: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -332,12 +334,20 @@ impl GpuRenderer {
             })
         });
 
-        log::info!("[gpu] OpenGL version: {:?}", unsafe {
-            gl.get_parameter_string(glow::VERSION)
-        });
-        log::info!("[gpu] OpenGL renderer: {:?}", unsafe {
-            gl.get_parameter_string(glow::RENDERER)
-        });
+        let gl_version = unsafe { gl.get_parameter_string(glow::VERSION) };
+        let gl_renderer = unsafe { gl.get_parameter_string(glow::RENDERER) };
+        log::info!("[gpu] OpenGL version: {:?}", gl_version);
+        log::info!("[gpu] OpenGL renderer: {:?}", gl_renderer);
+
+        let gl_extensions = unsafe { gl.get_parameter_string(glow::EXTENSIONS) };
+        let has_unpack_subimage = gl_extensions.contains("GL_EXT_unpack_subimage")
+            || gl_version.contains("OpenGL ES 3");
+        if has_unpack_subimage {
+            log::info!("[gpu] GL_EXT_unpack_subimage or GLES 3.0+ available");
+        } else {
+            log::info!("[gpu] GL_EXT_unpack_subimage not available, using row-by-row texture upload");
+        }
+
         let texture_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_TEXTURE)?;
         let external_program =
             Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_EXTERNAL).ok();
@@ -388,6 +398,7 @@ impl GpuRenderer {
             shm_textures: HashMap::new(),
             dmabuf_textures: HashMap::new(),
             supported_formats,
+            has_unpack_subimage,
         })
     }
 
@@ -864,22 +875,87 @@ impl GpuRenderer {
                 glow::CLAMP_TO_EDGE as i32,
             );
 
-            self.gl
-                .pixel_store_i32(glow::UNPACK_ROW_LENGTH, stride as i32);
+            let stride_pixels = stride / 4;
 
-            self.gl.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                glow::RGBA as i32,
-                width as i32,
-                height as i32,
-                0,
-                glow::BGRA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(data)),
-            );
+            if self.has_unpack_subimage && stride_pixels == width {
+                self.gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    glow::BGRA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+            } else if self.has_unpack_subimage {
+                self.gl
+                    .pixel_store_i32(glow::UNPACK_ROW_LENGTH, stride_pixels as i32);
 
-            self.gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
+                self.gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    glow::BGRA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+
+                self.gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
+            } else {
+                let row_bytes = (width * 4) as usize;
+                let stride_bytes = (stride * 4) as usize;
+
+                if stride_pixels == width {
+                    self.gl.tex_image_2d(
+                        glow::TEXTURE_2D,
+                        0,
+                        glow::RGBA as i32,
+                        width as i32,
+                        height as i32,
+                        0,
+                        glow::BGRA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(data)),
+                    );
+                } else {
+                    let mut packed_data = Vec::with_capacity(row_bytes * height as usize);
+                    for y in 0..height as usize {
+                        let row_start = y * stride_bytes;
+                        let row_end = row_start + row_bytes;
+                        if row_end <= data.len() {
+                            packed_data.extend_from_slice(&data[row_start..row_end]);
+                        }
+                    }
+
+                    self.gl.tex_image_2d(
+                        glow::TEXTURE_2D,
+                        0,
+                        glow::RGBA as i32,
+                        width as i32,
+                        height as i32,
+                        0,
+                        glow::BGRA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&packed_data)),
+                    );
+                }
+            }
+
+            let gl_error = self.gl.get_error();
+            if gl_error != glow::NO_ERROR {
+                log::warn!(
+                    "[gpu] GL error after texture upload: {:#x} (id={}, {}x{})",
+                    gl_error,
+                    id,
+                    width,
+                    height
+                );
+            }
 
             texture
         }
