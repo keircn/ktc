@@ -1,104 +1,59 @@
 use std::collections::HashMap;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-use std::rc::Rc;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+
+use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::gbm::GbmDevice;
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::egl::context::{GlAttributes, PixelFormatRequirements};
+use smithay::backend::egl::{EGLContext, EGLDisplay};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::{Bind, Frame, ImportDma, ImportMem, Renderer, Texture};
+use smithay::backend::renderer::Color32F;
+use smithay::utils::{Point, Rectangle, Size, Transform};
 
 use drm::control::{connector, crtc, framebuffer, Device as ControlDevice};
-use gbm::{AsRaw, BufferObjectFlags, Device as GbmDevice};
-use glow::HasContext;
-use khronos_egl as egl;
+use drm_fourcc::{DrmFourcc, DrmModifier};
 
-pub type GlowContext = glow::Context;
+use smithay::reexports::gbm::{BufferObject, BufferObjectFlags};
 
-const EGL_PLATFORM_GBM_KHR: egl::Enum = 0x31D7;
-const EGL_LINUX_DMA_BUF_EXT: egl::Enum = 0x3270;
-const EGL_LINUX_DRM_FOURCC_EXT: egl::Int = 0x3271;
-
-const EGL_DMA_BUF_PLANE0_FD_EXT: egl::Int = 0x3272;
-const EGL_DMA_BUF_PLANE0_OFFSET_EXT: egl::Int = 0x3273;
-const EGL_DMA_BUF_PLANE0_PITCH_EXT: egl::Int = 0x3274;
-const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: egl::Int = 0x3443;
-const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: egl::Int = 0x3444;
-
-const EGL_DMA_BUF_PLANE1_FD_EXT: egl::Int = 0x3275;
-const EGL_DMA_BUF_PLANE1_OFFSET_EXT: egl::Int = 0x3276;
-const EGL_DMA_BUF_PLANE1_PITCH_EXT: egl::Int = 0x3277;
-const EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT: egl::Int = 0x3445;
-const EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT: egl::Int = 0x3446;
-
-const EGL_DMA_BUF_PLANE2_FD_EXT: egl::Int = 0x3278;
-const EGL_DMA_BUF_PLANE2_OFFSET_EXT: egl::Int = 0x3279;
-const EGL_DMA_BUF_PLANE2_PITCH_EXT: egl::Int = 0x327A;
-const EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT: egl::Int = 0x3447;
-const EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT: egl::Int = 0x3448;
-
-const EGL_DMA_BUF_PLANE3_FD_EXT: egl::Int = 0x3440;
-const EGL_DMA_BUF_PLANE3_OFFSET_EXT: egl::Int = 0x3441;
-const EGL_DMA_BUF_PLANE3_PITCH_EXT: egl::Int = 0x3442;
-const EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT: egl::Int = 0x3449;
-const EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT: egl::Int = 0x344A;
-
-#[allow(dead_code)]
-const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
-
-const VERTEX_SHADER: &str = r#"#version 100
-attribute vec2 a_position;
-attribute vec2 a_texcoord;
-varying vec2 v_texcoord;
-
-uniform vec2 u_offset;
-uniform vec2 u_size;
-uniform vec2 u_screen_size;
-
-void main() {
-    vec2 pos = (a_position * u_size + u_offset) / u_screen_size * 2.0 - 1.0;
-    pos.y = -pos.y;
-    gl_Position = vec4(pos, 0.0, 1.0);
-    v_texcoord = a_texcoord;
+#[derive(Clone, Debug)]
+pub struct DmaBufFormat {
+    pub format: u32,
+    pub modifier: u64,
 }
-"#;
 
-const FRAGMENT_SHADER_TEXTURE: &str = r#"#version 100
-precision mediump float;
-varying vec2 v_texcoord;
-uniform sampler2D u_texture;
-
-void main() {
-    vec4 color = texture2D(u_texture, v_texcoord);
-    gl_FragColor = vec4(color.rgb, 1.0);
+pub struct GpuRenderer {
+    renderer: GlesRenderer,
+    #[allow(dead_code)]
+    egl_display: EGLDisplay,
+    drm_device: std::fs::File,
+    drm_fd: i32,
+    #[allow(dead_code)]
+    gbm: GbmDevice<std::fs::File>,
+    width: u32,
+    height: u32,
+    physical_width: u32,
+    physical_height: u32,
+    mode: drm::control::Mode,
+    connector: connector::Handle,
+    crtc: crtc::Handle,
+    render_buffers: [RenderBuffer; 2],
+    current_buffer: usize,
+    mode_set: bool,
+    flip_pending: bool,
+    pending_fb: Option<framebuffer::Handle>,
+    current_fb: Option<framebuffer::Handle>,
+    shm_textures: HashMap<u64, GlesTexture>,
+    dmabuf_textures: HashMap<u64, GlesTexture>,
+    pub supported_formats: Vec<DmaBufFormat>,
 }
-"#;
 
-const FRAGMENT_SHADER_EXTERNAL: &str = r#"#version 100
-#extension GL_OES_EGL_image_external : require
-precision mediump float;
-varying vec2 v_texcoord;
-uniform samplerExternalOES u_texture;
-
-void main() {
-    vec4 color = texture2D(u_texture, v_texcoord);
-    gl_FragColor = vec4(color.rgb, 1.0);
+struct RenderBuffer {
+    #[allow(dead_code)]
+    bo: BufferObject<()>,
+    dmabuf: Dmabuf,
+    fb: Option<framebuffer::Handle>,
 }
-"#;
-
-const FRAGMENT_SHADER_DMABUF: &str = r#"#version 100
-precision mediump float;
-varying vec2 v_texcoord;
-uniform sampler2D u_texture;
-
-void main() {
-    vec4 color = texture2D(u_texture, v_texcoord);
-    gl_FragColor = vec4(color.rgb, 1.0);
-}
-"#;
-
-const FRAGMENT_SHADER_COLOR: &str = r#"#version 100
-precision mediump float;
-uniform vec4 u_color;
-
-void main() {
-    gl_FragColor = u_color;
-}
-"#;
 
 struct DrmCard(std::fs::File);
 
@@ -111,68 +66,7 @@ impl AsFd for DrmCard {
 impl drm::Device for DrmCard {}
 impl ControlDevice for DrmCard {}
 
-pub struct GpuRenderer {
-    egl: Rc<egl::DynamicInstance<egl::EGL1_5>>,
-    display: egl::Display,
-    context: egl::Context,
-    surface: egl::Surface,
-    gl: Rc<GlowContext>,
-
-    #[allow(dead_code)]
-    gbm: GbmDevice<std::fs::File>,
-    gbm_surface: *mut std::ffi::c_void,
-    drm_card: DrmCard,
-    crtc: crtc::Handle,
-    connector: connector::Handle,
-    mode: drm::control::Mode,
-
-    current_fb: Option<framebuffer::Handle>,
-    current_bo: *mut gbm_sys::gbm_bo,
-    next_fb: Option<framebuffer::Handle>,
-    next_bo: *mut gbm_sys::gbm_bo,
-    mode_set: bool,
-    flip_pending: bool,
-
-    texture_program: glow::Program,
-    external_program: Option<glow::Program>,
-    dmabuf_program: glow::Program,
-    color_program: glow::Program,
-    quad_vao: glow::VertexArray,
-    #[allow(dead_code)]
-    quad_vbo: glow::Buffer,
-
-    width: u32,
-    height: u32,
-    physical_width: u32,
-    physical_height: u32,
-
-    shm_textures: HashMap<u64, glow::Texture>,
-    dmabuf_textures: HashMap<u64, (glow::Texture, egl::Image, bool)>,
-
-    pub supported_formats: Vec<DmaBufFormat>,
-
-    has_unpack_subimage: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct DmaBufFormat {
-    pub format: u32,
-    pub modifier: u64,
-}
-
-#[allow(dead_code)]
-pub struct DmaBufInfo {
-    pub fd: OwnedFd,
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub stride: u32,
-    pub offset: u32,
-    pub modifier: u64,
-}
-
 impl GpuRenderer {
-    #[allow(dead_code)]
     pub fn new(drm_device: std::fs::File) -> Result<Self, Box<dyn std::error::Error>> {
         Self::new_with_config(drm_device, None, true)
     }
@@ -183,23 +77,17 @@ impl GpuRenderer {
         _vsync: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let gbm = GbmDevice::new(drm_device.try_clone()?)?;
-
-        let egl = Rc::new(unsafe {
-            egl::DynamicInstance::<egl::EGL1_5>::load_required()
-                .map_err(|e| format!("Failed to load EGL: {:?}", e))?
-        });
-
         let card = DrmCard(drm_device.try_clone()?);
-        let res = card.resource_handles()?;
-        let connectors: Vec<_> = res
+        let resources = card.resource_handles()?;
+        let connectors: Vec<_> = resources
             .connectors()
             .iter()
-            .filter_map(|&conn| card.get_connector(conn, true).ok())
+            .filter_map(|&c| card.get_connector(c, true).ok())
             .collect();
 
         let connector_info = connectors
             .iter()
-            .find(|c| c.state() == drm::control::connector::State::Connected)
+            .find(|c| c.state() == connector::State::Connected)
             .ok_or("No connected display found")?;
 
         let connector_handle = connector_info.handle();
@@ -253,9 +141,6 @@ impl GpuRenderer {
             physical_width,
             physical_height
         );
-
-        let crtc_handle = res.crtcs().first().copied().ok_or("No CRTC available")?;
-
         log::info!(
             "[gpu] Selected mode: {}x{}@{}Hz",
             width,
@@ -263,540 +148,238 @@ impl GpuRenderer {
             mode.vrefresh()
         );
 
-        let gbm_ptr = gbm.as_raw() as *mut std::ffi::c_void;
-        let display = unsafe {
-            egl.get_platform_display(EGL_PLATFORM_GBM_KHR, gbm_ptr, &[egl::NONE as egl::Attrib])
-                .map_err(|e| format!("Failed to get EGL display: {:?}", e))?
+        let crtc_handle = resources.crtcs().first().copied().ok_or("No CRTC available")?;
+
+        let gbm_for_egl = GbmDevice::new(drm_device.try_clone()?)?;
+
+        let egl_display = unsafe { EGLDisplay::new(gbm_for_egl) }
+            .map_err(|e| format!("EGL display failed: {:?}", e))?;
+
+        let gl_attrs = GlAttributes {
+            version: (3, 0),
+            profile: None,
+            debug: false,
+            vsync: false,
         };
+        let egl_context =
+            EGLContext::new_with_config(&egl_display, gl_attrs, PixelFormatRequirements::_10_bit())
+                .or_else(|_| EGLContext::new_with_config(&egl_display, gl_attrs, PixelFormatRequirements::_8_bit()))
+                .map_err(|e| format!("EGL context failed: {:?}", e))?;
 
-        egl.initialize(display)?;
+        let renderer = unsafe { GlesRenderer::new(egl_context) }
+            .map_err(|e| format!("GLES renderer failed: {:?}", e))?;
 
-        let extensions = egl
-            .query_string(Some(display), egl::EXTENSIONS)
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
+        log::info!("[gpu] Smithay GLES renderer initialized");
 
-        log::info!("[gpu] EGL extensions available");
-
-        let has_dmabuf_import = extensions.contains("EGL_EXT_image_dma_buf_import");
-        log::info!("[gpu] DMA-BUF import: {}", has_dmabuf_import);
-
-        let config_attribs = [
-            egl::SURFACE_TYPE,
-            egl::WINDOW_BIT,
-            egl::RENDERABLE_TYPE,
-            egl::OPENGL_ES2_BIT,
-            egl::RED_SIZE,
-            8,
-            egl::GREEN_SIZE,
-            8,
-            egl::BLUE_SIZE,
-            8,
-            egl::ALPHA_SIZE,
-            8,
-            egl::NONE,
-        ];
-
-        let config = egl
-            .choose_first_config(display, &config_attribs)?
-            .ok_or("No suitable EGL config")?;
-
-        let gbm_surface = gbm.create_surface::<()>(
-            width,
-            height,
-            gbm::Format::Xrgb8888,
-            BufferObjectFlags::SCANOUT | BufferObjectFlags::RENDERING,
-        )?;
-
-        let gbm_surface_ptr = gbm_surface.as_raw() as *mut std::ffi::c_void;
-        let surface = unsafe {
-            egl.create_platform_window_surface(
-                display,
-                config,
-                gbm_surface_ptr,
-                &[egl::NONE as egl::Attrib],
-            )?
-        };
-
-        egl.bind_api(egl::OPENGL_ES_API)?;
-
-        let context_attribs = [egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE];
-
-        let context = egl.create_context(display, config, None, &context_attribs)?;
-
-        egl.make_current(display, Some(surface), Some(surface), Some(context))?;
-
-        let gl = Rc::new(unsafe {
-            GlowContext::from_loader_function(|s| {
-                egl.get_proc_address(s)
-                    .map(|p| p as *const _)
-                    .unwrap_or(std::ptr::null())
-            })
-        });
-
-        let gl_version = unsafe { gl.get_parameter_string(glow::VERSION) };
-        let gl_renderer = unsafe { gl.get_parameter_string(glow::RENDERER) };
-        log::info!("[gpu] OpenGL version: {:?}", gl_version);
-        log::info!("[gpu] OpenGL renderer: {:?}", gl_renderer);
-
-        let gl_extensions = unsafe { gl.get_parameter_string(glow::EXTENSIONS) };
-        let has_unpack_subimage = gl_extensions.contains("GL_EXT_unpack_subimage")
-            || gl_version.contains("OpenGL ES 3");
-        if has_unpack_subimage {
-            log::info!("[gpu] GL_EXT_unpack_subimage or GLES 3.0+ available");
-        } else {
-            log::info!("[gpu] GL_EXT_unpack_subimage not available, using row-by-row texture upload");
-        }
-
-        let texture_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_TEXTURE)?;
-        let external_program =
-            Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_EXTERNAL).ok();
-        if external_program.is_some() {
-            log::info!("[gpu] GL_OES_EGL_image_external supported");
-        } else {
-            log::warn!("[gpu] GL_OES_EGL_image_external not supported, DMA-BUF may not work");
-        }
-        let dmabuf_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_DMABUF)?;
-        let color_program = Self::create_program(&gl, VERTEX_SHADER, FRAGMENT_SHADER_COLOR)?;
-        let (quad_vao, quad_vbo) = Self::create_quad(&gl)?;
-        let supported_formats = Self::query_dmabuf_formats(&egl, display);
+        let supported_formats = Self::query_dmabuf_formats(&egl_display);
         log::info!(
             "[gpu] Supported DMA-BUF formats: {}",
             supported_formats.len()
         );
-        let gbm_surface_raw = gbm_surface.as_raw() as *mut std::ffi::c_void;
-        std::mem::forget(gbm_surface);
+
+        let render_buffers = [
+            Self::create_render_buffer(&gbm, &card, width, height)?,
+            Self::create_render_buffer(&gbm, &card, width, height)?,
+        ];
+
+        let drm_fd = drm_device.as_raw_fd();
 
         Ok(Self {
-            egl,
-            display,
-            context,
-            surface,
-            gl,
+            renderer,
+            egl_display,
+            drm_device,
+            drm_fd,
             gbm,
-            gbm_surface: gbm_surface_raw,
-            drm_card: card,
-            crtc: crtc_handle,
-            connector: connector_handle,
-            mode,
-            current_fb: None,
-            current_bo: std::ptr::null_mut(),
-            next_fb: None,
-            next_bo: std::ptr::null_mut(),
-            mode_set: false,
-            flip_pending: false,
-            texture_program,
-            external_program,
-            dmabuf_program,
-            color_program,
-            quad_vao,
-            quad_vbo,
             width,
             height,
             physical_width,
             physical_height,
+            mode,
+            connector: connector_handle,
+            crtc: crtc_handle,
+            render_buffers,
+            current_buffer: 0,
+            mode_set: false,
+            flip_pending: false,
+            pending_fb: None,
+            current_fb: None,
             shm_textures: HashMap::new(),
             dmabuf_textures: HashMap::new(),
             supported_formats,
-            has_unpack_subimage,
         })
     }
 
-    fn create_program(
-        gl: &GlowContext,
-        vs_src: &str,
-        fs_src: &str,
-    ) -> Result<glow::Program, Box<dyn std::error::Error>> {
-        unsafe {
-            let program = gl.create_program()?;
+    fn create_render_buffer(
+        gbm: &GbmDevice<std::fs::File>,
+        card: &DrmCard,
+        width: u32,
+        height: u32,
+    ) -> Result<RenderBuffer, Box<dyn std::error::Error>> {
+        use smithay::reexports::gbm::Format as GbmFormat;
 
-            let vs = gl.create_shader(glow::VERTEX_SHADER)?;
-            gl.shader_source(vs, vs_src);
-            gl.compile_shader(vs);
-            if !gl.get_shader_compile_status(vs) {
-                let log = gl.get_shader_info_log(vs);
-                return Err(format!("Vertex shader error: {}", log).into());
-            }
+        let bo = gbm
+            .create_buffer_object::<()>(
+                width,
+                height,
+                GbmFormat::Xrgb8888,
+                BufferObjectFlags::SCANOUT | BufferObjectFlags::RENDERING,
+            )
+            .map_err(|e| format!("Failed to create GBM buffer: {:?}", e))?;
 
-            let fs = gl.create_shader(glow::FRAGMENT_SHADER)?;
-            gl.shader_source(fs, fs_src);
-            gl.compile_shader(fs);
-            if !gl.get_shader_compile_status(fs) {
-                let log = gl.get_shader_info_log(fs);
-                return Err(format!("Fragment shader error: {}", log).into());
-            }
+        let fd = bo.fd().map_err(|e| format!("Failed to get BO fd: {:?}", e))?;
+        let stride = bo.stride();
+        let modifier: DrmModifier = bo.modifier().into();
 
-            gl.attach_shader(program, vs);
-            gl.attach_shader(program, fs);
+        let mut builder = Dmabuf::builder(
+            (width as i32, height as i32),
+            DrmFourcc::Xrgb8888,
+            modifier.into(),
+            smithay::backend::allocator::dmabuf::DmabufFlags::empty(),
+        );
 
-            gl.bind_attrib_location(program, 0, "a_position");
-            gl.bind_attrib_location(program, 1, "a_texcoord");
-
-            gl.link_program(program);
-            if !gl.get_program_link_status(program) {
-                let log = gl.get_program_info_log(program);
-                return Err(format!("Program link error: {}", log).into());
-            }
-
-            gl.delete_shader(vs);
-            gl.delete_shader(fs);
-
-            Ok(program)
+        let plane_fd = unsafe { OwnedFd::from_raw_fd(libc::dup(fd.as_raw_fd())) };
+        if !builder.add_plane(plane_fd, 0, 0, stride) {
+            return Err("Failed to add plane to Dmabuf".into());
         }
+
+        let dmabuf = builder.build().ok_or("Failed to build Dmabuf")?;
+
+        let handle = unsafe { bo.handle().u32_ };
+        let fb = card
+            .add_framebuffer(
+                &DrmBuffer {
+                    handle,
+                    width,
+                    height,
+                    stride,
+                },
+                24,
+                32,
+            )
+            .map_err(|e| format!("Failed to create framebuffer: {:?}", e))?;
+
+        Ok(RenderBuffer {
+            bo,
+            dmabuf,
+            fb: Some(fb),
+        })
     }
 
-    fn create_quad(
-        gl: &GlowContext,
-    ) -> Result<(glow::VertexArray, glow::Buffer), Box<dyn std::error::Error>> {
-        unsafe {
-            let vao = gl.create_vertex_array()?;
-            gl.bind_vertex_array(Some(vao));
-
-            let vbo = gl.create_buffer()?;
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-
-            // Position (x, y) + Texcoord (u, v)
-            #[rustfmt::skip]
-            let vertices: [f32; 24] = [
-                // pos      // tex
-                0.0, 0.0,   0.0, 0.0,
-                1.0, 0.0,   1.0, 0.0,
-                0.0, 1.0,   0.0, 1.0,
-                1.0, 0.0,   1.0, 0.0,
-                1.0, 1.0,   1.0, 1.0,
-                0.0, 1.0,   0.0, 1.0,
-            ];
-
-            gl.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
-                bytemuck_cast_slice(&vertices),
-                glow::STATIC_DRAW,
-            );
-
-            gl.enable_vertex_attrib_array(0);
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 16, 0);
-
-            gl.enable_vertex_attrib_array(1);
-            gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, 16, 8);
-
-            gl.bind_vertex_array(None);
-
-            Ok((vao, vbo))
-        }
-    }
-
-    fn query_dmabuf_formats(
-        egl: &egl::DynamicInstance<egl::EGL1_5>,
-        display: egl::Display,
-    ) -> Vec<DmaBufFormat> {
+    fn query_dmabuf_formats(egl_display: &EGLDisplay) -> Vec<DmaBufFormat> {
         let mut formats = Vec::new();
 
-        #[allow(improper_ctypes_definitions)]
-        type QueryDmaBufFormatsEXT =
-            unsafe extern "C" fn(*const std::ffi::c_void, i32, *mut i32, *mut i32) -> u32;
-
-        #[allow(improper_ctypes_definitions)]
-        type QueryDmaBufModifiersEXT = unsafe extern "C" fn(
-            *const std::ffi::c_void,
-            i32,
-            i32,
-            *mut u64,
-            *mut u32,
-            *mut i32,
-        ) -> u32;
-
-        let query_formats: Option<QueryDmaBufFormatsEXT> = egl
-            .get_proc_address("eglQueryDmaBufFormatsEXT")
-            .map(|p| unsafe { std::mem::transmute(p) });
-        let query_modifiers: Option<QueryDmaBufModifiersEXT> = egl
-            .get_proc_address("eglQueryDmaBufModifiersEXT")
-            .map(|p| unsafe { std::mem::transmute(p) });
-
-        let (query_formats, query_modifiers) = match (query_formats, query_modifiers) {
-            (Some(f), Some(m)) => (f, m),
-            _ => {
-                log::warn!("[gpu] EGL_EXT_image_dma_buf_import_modifiers not available, using fallback formats");
-                return Self::fallback_dmabuf_formats();
-            }
-        };
-
-        let display_ptr = display.as_ptr();
-
-        let mut num_formats: i32 = 0;
-        let result =
-            unsafe { query_formats(display_ptr, 0, std::ptr::null_mut(), &mut num_formats) };
-        if result == 0 || num_formats <= 0 {
-            log::warn!("[gpu] eglQueryDmaBufFormatsEXT failed, using fallback formats");
-            return Self::fallback_dmabuf_formats();
-        }
-
-        let mut format_list = vec![0i32; num_formats as usize];
-        let result = unsafe {
-            query_formats(
-                display_ptr,
-                num_formats,
-                format_list.as_mut_ptr(),
-                &mut num_formats,
-            )
-        };
-        if result == 0 {
-            log::warn!("[gpu] eglQueryDmaBufFormatsEXT (get) failed, using fallback formats");
-            return Self::fallback_dmabuf_formats();
-        }
-
-        log::info!("[gpu] EGL reports {} DMA-BUF formats", num_formats);
-
-        for &format in &format_list {
-            let mut num_modifiers: i32 = 0;
-            let result = unsafe {
-                query_modifiers(
-                    display_ptr,
-                    format,
-                    0,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    &mut num_modifiers,
-                )
-            };
-
-            if result == 0 || num_modifiers <= 0 {
-                formats.push(DmaBufFormat {
-                    format: format as u32,
-                    modifier: drm_fourcc::DrmModifier::Invalid.into(),
-                });
-                continue;
-            }
-
-            let mut modifiers = vec![0u64; num_modifiers as usize];
-            let mut external_only = vec![0u32; num_modifiers as usize];
-            let result = unsafe {
-                query_modifiers(
-                    display_ptr,
-                    format,
-                    num_modifiers,
-                    modifiers.as_mut_ptr(),
-                    external_only.as_mut_ptr(),
-                    &mut num_modifiers,
-                )
-            };
-
-            if result == 0 {
-                formats.push(DmaBufFormat {
-                    format: format as u32,
-                    modifier: drm_fourcc::DrmModifier::Invalid.into(),
-                });
-                continue;
-            }
-
-            for (i, &modifier) in modifiers.iter().enumerate() {
-                if external_only.get(i).copied().unwrap_or(0) == 0 {
-                    formats.push(DmaBufFormat {
-                        format: format as u32,
-                        modifier,
-                    });
-                }
-            }
+        let egl_formats = egl_display.dmabuf_render_formats();
+        for format in egl_formats.iter() {
+            formats.push(DmaBufFormat {
+                format: format.code as u32,
+                modifier: format.modifier.into(),
+            });
         }
 
         if formats.is_empty() {
-            log::warn!("[gpu] No DMA-BUF formats found via EGL, using fallback");
-            return Self::fallback_dmabuf_formats();
+            formats = vec![
+                DmaBufFormat {
+                    format: DrmFourcc::Argb8888 as u32,
+                    modifier: DrmModifier::Invalid.into(),
+                },
+                DmaBufFormat {
+                    format: DrmFourcc::Xrgb8888 as u32,
+                    modifier: DrmModifier::Invalid.into(),
+                },
+                DmaBufFormat {
+                    format: DrmFourcc::Argb8888 as u32,
+                    modifier: DrmModifier::Linear.into(),
+                },
+                DmaBufFormat {
+                    format: DrmFourcc::Xrgb8888 as u32,
+                    modifier: DrmModifier::Linear.into(),
+                },
+            ];
         }
 
         formats
     }
 
-    fn fallback_dmabuf_formats() -> Vec<DmaBufFormat> {
-        vec![
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Argb8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Invalid.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Xrgb8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Invalid.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Abgr8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Invalid.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Xbgr8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Invalid.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Argb8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Linear.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Xrgb8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Linear.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Abgr8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Linear.into(),
-            },
-            DmaBufFormat {
-                format: drm_fourcc::DrmFourcc::Xbgr8888 as u32,
-                modifier: drm_fourcc::DrmModifier::Linear.into(),
-            },
-        ]
-    }
-
     pub fn begin_frame(&mut self) {
-        self.egl
-            .make_current(
-                self.display,
-                Some(self.surface),
-                Some(self.surface),
-                Some(self.context),
-            )
-            .ok();
+        if self.flip_pending {
+            self.wait_for_flip();
+            self.flip_pending = false;
+            self.current_fb = self.pending_fb.take();
+        }
 
-        unsafe {
-            self.gl
-                .viewport(0, 0, self.width as i32, self.height as i32);
-            self.gl.clear_color(0.1, 0.1, 0.12, 1.0);
-            self.gl.clear(glow::COLOR_BUFFER_BIT);
+        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
+        let size = Size::from((self.width as i32, self.height as i32));
+        
+        if let Ok(mut target) = self.renderer.bind(dmabuf) {
+            if let Ok(mut frame) = self.renderer.render(&mut target, size, Transform::Normal) {
+                let clear_rect = Rectangle::new(Point::from((0, 0)), size);
+                let _ = frame.clear(Color32F::new(0.1, 0.1, 0.12, 1.0), &[clear_rect]);
+                let _ = frame.finish();
+            }
         }
     }
 
     pub fn end_frame(&mut self) {
-        if self.flip_pending {
-            self.wait_for_flip();
-            self.flip_pending = false;
-
-            unsafe {
-                let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
-                if let Some(old_fb) = self.current_fb.take() {
-                    self.drm_card.destroy_framebuffer(old_fb).ok();
-                }
-                if !self.current_bo.is_null() {
-                    gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
-                }
-                self.current_fb = self.next_fb.take();
-                self.current_bo = self.next_bo;
-                self.next_bo = std::ptr::null_mut();
-            }
-        }
-
-        self.egl.swap_buffers(self.display, self.surface).ok();
-
-        unsafe {
-            let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
-            let bo = gbm_sys::gbm_surface_lock_front_buffer(gbm_surface);
-            if bo.is_null() {
-                log::error!("[gpu] Failed to lock front buffer");
+        let fb = match self.render_buffers[self.current_buffer].fb {
+            Some(fb) => fb,
+            None => {
+                log::error!("[gpu] No framebuffer for current buffer");
                 return;
             }
+        };
 
-            let handle = gbm_sys::gbm_bo_get_handle(bo).u32_;
-            let stride = gbm_sys::gbm_bo_get_stride(bo);
-            let width = gbm_sys::gbm_bo_get_width(bo);
-            let height = gbm_sys::gbm_bo_get_height(bo);
-
-            struct GbmBuffer {
-                handle: u32,
-                width: u32,
-                height: u32,
-                stride: u32,
+        let card = match self.drm_device.try_clone().map(DrmCard) {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("[gpu] Failed to clone DRM device: {:?}", e);
+                return;
             }
+        };
 
-            impl drm::buffer::Buffer for GbmBuffer {
-                fn size(&self) -> (u32, u32) {
-                    (self.width, self.height)
-                }
-                fn format(&self) -> drm::buffer::DrmFourcc {
-                    drm::buffer::DrmFourcc::Xrgb8888
-                }
-                fn pitch(&self) -> u32 {
-                    self.stride
-                }
-                fn handle(&self) -> drm::buffer::Handle {
-                    drm::buffer::Handle::from(std::num::NonZeroU32::new(self.handle).unwrap())
-                }
+        if !self.mode_set {
+            if let Err(e) = card.set_crtc(
+                self.crtc,
+                Some(fb),
+                (0, 0),
+                &[self.connector],
+                Some(self.mode),
+            ) {
+                log::error!("[gpu] set_crtc failed: {}", e);
+                return;
             }
+            self.mode_set = true;
+            self.current_fb = Some(fb);
+        } else {
+            use drm::control::PageFlipFlags;
 
-            let buffer = GbmBuffer {
-                handle,
-                width,
-                height,
-                stride,
-            };
-
-            let fb = match self.drm_card.add_framebuffer(&buffer, 24, 32) {
-                Ok(fb) => fb,
+            match card.page_flip(self.crtc, fb, PageFlipFlags::EVENT, None) {
+                Ok(()) => {
+                    self.pending_fb = Some(fb);
+                    self.flip_pending = true;
+                }
                 Err(e) => {
-                    log::error!("[gpu] Failed to add framebuffer: {}", e);
-                    gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
-                    return;
-                }
-            };
-
-            if !self.mode_set {
-                if let Err(e) = self.drm_card.set_crtc(
-                    self.crtc,
-                    Some(fb),
-                    (0, 0),
-                    &[self.connector],
-                    Some(self.mode),
-                ) {
-                    log::error!("[gpu] set_crtc failed: {}", e);
-                    self.drm_card.destroy_framebuffer(fb).ok();
-                    gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
-                    return;
-                }
-                self.mode_set = true;
-                self.current_fb = Some(fb);
-                self.current_bo = bo;
-            } else {
-                use drm::control::PageFlipFlags;
-
-                match self
-                    .drm_card
-                    .page_flip(self.crtc, fb, PageFlipFlags::EVENT, None)
-                {
-                    Ok(()) => {
-                        self.next_fb = Some(fb);
-                        self.next_bo = bo;
-                        self.flip_pending = true;
+                    log::warn!("[gpu] page_flip failed: {}, falling back to set_crtc", e);
+                    if let Err(e) = card.set_crtc(
+                        self.crtc,
+                        Some(fb),
+                        (0, 0),
+                        &[self.connector],
+                        Some(self.mode),
+                    ) {
+                        log::error!("[gpu] set_crtc fallback failed: {}", e);
+                        return;
                     }
-                    Err(e) => {
-                        log::warn!("[gpu] page_flip failed: {}, falling back to set_crtc", e);
-                        if let Err(e) = self.drm_card.set_crtc(
-                            self.crtc,
-                            Some(fb),
-                            (0, 0),
-                            &[self.connector],
-                            Some(self.mode),
-                        ) {
-                            log::error!("[gpu] set_crtc fallback failed: {}", e);
-                            self.drm_card.destroy_framebuffer(fb).ok();
-                            gbm_sys::gbm_surface_release_buffer(gbm_surface, bo);
-                            return;
-                        }
-
-                        if let Some(old_fb) = self.current_fb.take() {
-                            self.drm_card.destroy_framebuffer(old_fb).ok();
-                        }
-                        if !self.current_bo.is_null() {
-                            gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
-                        }
-
-                        self.current_fb = Some(fb);
-                        self.current_bo = bo;
-                    }
+                    self.current_fb = Some(fb);
                 }
             }
         }
+
+        self.current_buffer = 1 - self.current_buffer;
     }
 
     fn wait_for_flip(&self) {
-        use std::os::fd::AsRawFd;
-
-        let fd = self.drm_card.as_fd().as_raw_fd();
         let mut fds = [libc::pollfd {
-            fd,
+            fd: self.drm_fd,
             events: libc::POLLIN,
             revents: 0,
         }];
@@ -807,33 +390,24 @@ impl GpuRenderer {
             let ret = libc::poll(fds.as_mut_ptr(), 1, timeout_ms);
             if ret > 0 && (fds[0].revents & libc::POLLIN) != 0 {
                 let mut buf = [0u8; 1024];
-                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+                libc::read(self.drm_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
             }
         }
     }
 
-    pub fn draw_rect(&self, x: i32, y: i32, width: i32, height: i32, color: [f32; 4]) {
-        unsafe {
-            self.gl.use_program(Some(self.color_program));
+    pub fn draw_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: [f32; 4]) {
+        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
+        let output_size = Size::from((self.width as i32, self.height as i32));
 
-            let offset_loc = self.gl.get_uniform_location(self.color_program, "u_offset");
-            let size_loc = self.gl.get_uniform_location(self.color_program, "u_size");
-            let screen_loc = self
-                .gl
-                .get_uniform_location(self.color_program, "u_screen_size");
-            let color_loc = self.gl.get_uniform_location(self.color_program, "u_color");
-
-            self.gl
-                .uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
-            self.gl
-                .uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
-            self.gl
-                .uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
-            self.gl
-                .uniform_4_f32(color_loc.as_ref(), color[0], color[1], color[2], color[3]);
-
-            self.gl.bind_vertex_array(Some(self.quad_vao));
-            self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+        if let Ok(mut target) = self.renderer.bind(dmabuf) {
+            if let Ok(mut frame) = self.renderer.render(&mut target, output_size, Transform::Normal) {
+                let rect = Rectangle::new(
+                    Point::from((x, y)),
+                    Size::from((width, height)),
+                );
+                let _ = frame.clear(Color32F::from(color), &[rect]);
+                let _ = frame.finish();
+            }
         }
     }
 
@@ -842,171 +416,118 @@ impl GpuRenderer {
         id: u64,
         width: u32,
         height: u32,
-        stride: u32,
+        _stride: u32,
         data: &[u8],
-    ) -> glow::Texture {
-        unsafe {
-            if let Some(old_tex) = self.shm_textures.remove(&id) {
-                self.gl.delete_texture(old_tex);
+    ) -> GlesTexture {
+        self.shm_textures.remove(&id);
+
+        let format = Fourcc::Argb8888;
+        let size = Size::from((width as i32, height as i32));
+
+        match self.renderer.import_memory(data, format, size, false) {
+            Ok(texture) => {
+                self.shm_textures.insert(id, texture.clone());
+                texture
             }
-
-            let texture = self.gl.create_texture().unwrap();
-            self.shm_textures.insert(id, texture);
-
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-
-            let stride_pixels = stride / 4;
-
-            if self.has_unpack_subimage && stride_pixels == width {
-                self.gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA as i32,
-                    width as i32,
-                    height as i32,
-                    0,
-                    glow::BGRA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(data)),
-                );
-            } else if self.has_unpack_subimage {
-                self.gl
-                    .pixel_store_i32(glow::UNPACK_ROW_LENGTH, stride_pixels as i32);
-
-                self.gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA as i32,
-                    width as i32,
-                    height as i32,
-                    0,
-                    glow::BGRA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(data)),
-                );
-
-                self.gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
-            } else {
-                let row_bytes = (width * 4) as usize;
-                let stride_bytes = (stride * 4) as usize;
-
-                if stride_pixels == width {
-                    self.gl.tex_image_2d(
-                        glow::TEXTURE_2D,
-                        0,
-                        glow::RGBA as i32,
-                        width as i32,
-                        height as i32,
-                        0,
-                        glow::BGRA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelUnpackData::Slice(Some(data)),
-                    );
-                } else {
-                    let mut packed_data = Vec::with_capacity(row_bytes * height as usize);
-                    for y in 0..height as usize {
-                        let row_start = y * stride_bytes;
-                        let row_end = row_start + row_bytes;
-                        if row_end <= data.len() {
-                            packed_data.extend_from_slice(&data[row_start..row_end]);
-                        }
-                    }
-
-                    self.gl.tex_image_2d(
-                        glow::TEXTURE_2D,
-                        0,
-                        glow::RGBA as i32,
-                        width as i32,
-                        height as i32,
-                        0,
-                        glow::BGRA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelUnpackData::Slice(Some(&packed_data)),
-                    );
-                }
+            Err(e) => {
+                log::error!("[gpu] Failed to upload SHM texture: {:?}", e);
+                panic!("Failed to create texture");
             }
-
-            let gl_error = self.gl.get_error();
-            if gl_error != glow::NO_ERROR {
-                log::warn!(
-                    "[gpu] GL error after texture upload: {:#x} (id={}, {}x{})",
-                    gl_error,
-                    id,
-                    width,
-                    height
-                );
-            }
-
-            texture
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn import_dmabuf_texture(
         &mut self,
         id: u64,
-        fd: RawFd,
+        fd: i32,
         width: u32,
         height: u32,
         format: u32,
         stride: u32,
         offset: u32,
         modifier: u64,
-    ) -> Option<glow::Texture> {
-        if let Some((tex, _, _)) = self.dmabuf_textures.get(&id) {
-            return Some(*tex);
+    ) -> Option<GlesTexture> {
+        if let Some(tex) = self.dmabuf_textures.get(&id) {
+            return Some(tex.clone());
         }
 
-        log::info!("[gpu] Creating new DMA-BUF texture (single plane): id={} fd={} {}x{} format={:#x} modifier={:#x}",
-            id, fd, width, height, format, modifier);
+        let fourcc = DrmFourcc::try_from(format).ok()?;
+        let drm_mod = DrmModifier::from(modifier);
 
-        let mut attribs: Vec<egl::Attrib> = vec![
-            egl::WIDTH as egl::Attrib,
-            width as egl::Attrib,
-            egl::HEIGHT as egl::Attrib,
-            height as egl::Attrib,
-            EGL_LINUX_DRM_FOURCC_EXT as egl::Attrib,
-            format as egl::Attrib,
-        ];
+        let mut builder = Dmabuf::builder(
+            (width as i32, height as i32),
+            fourcc,
+            drm_mod.into(),
+            smithay::backend::allocator::dmabuf::DmabufFlags::empty(),
+        );
 
-        const MOD_INVALID: u64 = 0x00ffffffffffffff;
-
-        attribs.push(EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib);
-        attribs.push(fd as egl::Attrib);
-        attribs.push(EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib);
-        attribs.push(offset as egl::Attrib);
-        attribs.push(EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib);
-        attribs.push(stride as egl::Attrib);
-        if modifier != MOD_INVALID {
-            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT as egl::Attrib);
-            attribs.push((modifier & 0xFFFFFFFF) as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT as egl::Attrib);
-            attribs.push((modifier >> 32) as egl::Attrib);
+        let plane_fd = unsafe { OwnedFd::from_raw_fd(libc::dup(fd)) };
+        if !builder.add_plane(plane_fd, 0, offset, stride) {
+            log::warn!("[gpu] Failed to add plane to DMA-BUF");
+            return None;
         }
 
-        attribs.push(egl::NONE as egl::Attrib);
+        let dmabuf = builder.build()?;
 
-        self.import_dmabuf_texture_from_attribs(id, &attribs)
+        match self.renderer.import_dmabuf(&dmabuf, None) {
+            Ok(texture) => {
+                self.dmabuf_textures.insert(id, texture.clone());
+                Some(texture)
+            }
+            Err(e) => {
+                log::warn!("[gpu] Failed to import DMA-BUF: {:?}", e);
+                None
+            }
+        }
+    }
+
+    pub fn import_dmabuf_texture_multiplane(
+        &mut self,
+        id: u64,
+        width: u32,
+        height: u32,
+        format: u32,
+        planes: &[crate::state::DmaBufPlaneInfo],
+    ) -> Option<GlesTexture> {
+        if planes.is_empty() {
+            return None;
+        }
+
+        if let Some(tex) = self.dmabuf_textures.get(&id) {
+            return Some(tex.clone());
+        }
+
+        let fourcc = DrmFourcc::try_from(format).ok()?;
+
+        let drm_mod = DrmModifier::from(planes[0].modifier);
+
+        let mut builder = Dmabuf::builder(
+            (width as i32, height as i32),
+            fourcc,
+            drm_mod.into(),
+            smithay::backend::allocator::dmabuf::DmabufFlags::empty(),
+        );
+
+        for (i, plane) in planes.iter().enumerate() {
+            let fd = unsafe { OwnedFd::from_raw_fd(libc::dup(plane.fd.as_raw_fd())) };
+            if !builder.add_plane(fd, i as u32, plane.offset, plane.stride) {
+                log::warn!("[gpu] Failed to add plane {} to multi-plane DMA-BUF", i);
+                return None;
+            }
+        }
+
+        let dmabuf = builder.build()?;
+
+        match self.renderer.import_dmabuf(&dmabuf, None) {
+            Ok(texture) => {
+                self.dmabuf_textures.insert(id, texture.clone());
+                Some(texture)
+            }
+            Err(e) => {
+                log::warn!("[gpu] Failed to import multi-plane DMA-BUF: {:?}", e);
+                None
+            }
+        }
     }
 
     pub fn is_format_supported(&self, format: u32, modifier: u64) -> bool {
@@ -1019,403 +540,68 @@ impl GpuRenderer {
         })
     }
 
-    pub fn import_dmabuf_texture_multiplane(
+    pub fn is_dmabuf_external(&self, _id: u64) -> bool {
+        false
+    }
+
+    pub fn draw_texture(
         &mut self,
-        id: u64,
-        width: u32,
-        height: u32,
-        format: u32,
-        planes: &[crate::state::DmaBufPlaneInfo],
-    ) -> Option<glow::Texture> {
-        if planes.is_empty() {
-            log::warn!("[gpu] No planes provided for DMA-BUF import");
-            return None;
-        }
-
-        if let Some((tex, _, _)) = self.dmabuf_textures.get(&id) {
-            return Some(*tex);
-        }
-
-        let plane0 = &planes[0];
-        let fd0 = plane0.fd.as_raw_fd();
-
-        let is_supported = self.is_format_supported(format, plane0.modifier);
-        log::info!("[gpu] Creating new DMA-BUF texture: id={} fd={} {}x{} format={:#x} planes={} modifier={:#x} supported={}",
-            id, fd0, width, height, format, planes.len(), plane0.modifier, is_supported);
-
-        if !is_supported {
-            log::warn!(
-                "[gpu] Format {:#x} with modifier {:#x} not in supported formats list",
-                format,
-                plane0.modifier
-            );
-        }
-
-        let mut attribs: Vec<egl::Attrib> = vec![
-            egl::WIDTH as egl::Attrib,
-            width as egl::Attrib,
-            egl::HEIGHT as egl::Attrib,
-            height as egl::Attrib,
-            EGL_LINUX_DRM_FOURCC_EXT as egl::Attrib,
-            format as egl::Attrib,
-        ];
-
-        const MOD_INVALID: u64 = 0x00ffffffffffffff;
-
-        attribs.push(EGL_DMA_BUF_PLANE0_FD_EXT as egl::Attrib);
-        attribs.push(fd0 as egl::Attrib);
-        attribs.push(EGL_DMA_BUF_PLANE0_OFFSET_EXT as egl::Attrib);
-        attribs.push(plane0.offset as egl::Attrib);
-        attribs.push(EGL_DMA_BUF_PLANE0_PITCH_EXT as egl::Attrib);
-        attribs.push(plane0.stride as egl::Attrib);
-        if plane0.modifier != MOD_INVALID {
-            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT as egl::Attrib);
-            attribs.push((plane0.modifier & 0xFFFFFFFF) as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT as egl::Attrib);
-            attribs.push((plane0.modifier >> 32) as egl::Attrib);
-        }
-
-        if planes.len() > 1 {
-            let plane1 = &planes[1];
-            let fd1 = plane1.fd.as_raw_fd();
-            attribs.push(EGL_DMA_BUF_PLANE1_FD_EXT as egl::Attrib);
-            attribs.push(fd1 as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE1_OFFSET_EXT as egl::Attrib);
-            attribs.push(plane1.offset as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE1_PITCH_EXT as egl::Attrib);
-            attribs.push(plane1.stride as egl::Attrib);
-            if plane1.modifier != MOD_INVALID {
-                attribs.push(EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT as egl::Attrib);
-                attribs.push((plane1.modifier & 0xFFFFFFFF) as egl::Attrib);
-                attribs.push(EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT as egl::Attrib);
-                attribs.push((plane1.modifier >> 32) as egl::Attrib);
-            }
-        }
-
-        if planes.len() > 2 {
-            let plane2 = &planes[2];
-            let fd2 = plane2.fd.as_raw_fd();
-            attribs.push(EGL_DMA_BUF_PLANE2_FD_EXT as egl::Attrib);
-            attribs.push(fd2 as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE2_OFFSET_EXT as egl::Attrib);
-            attribs.push(plane2.offset as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE2_PITCH_EXT as egl::Attrib);
-            attribs.push(plane2.stride as egl::Attrib);
-            if plane2.modifier != MOD_INVALID {
-                attribs.push(EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT as egl::Attrib);
-                attribs.push((plane2.modifier & 0xFFFFFFFF) as egl::Attrib);
-                attribs.push(EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT as egl::Attrib);
-                attribs.push((plane2.modifier >> 32) as egl::Attrib);
-            }
-        }
-
-        if planes.len() > 3 {
-            let plane3 = &planes[3];
-            let fd3 = plane3.fd.as_raw_fd();
-            attribs.push(EGL_DMA_BUF_PLANE3_FD_EXT as egl::Attrib);
-            attribs.push(fd3 as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE3_OFFSET_EXT as egl::Attrib);
-            attribs.push(plane3.offset as egl::Attrib);
-            attribs.push(EGL_DMA_BUF_PLANE3_PITCH_EXT as egl::Attrib);
-            attribs.push(plane3.stride as egl::Attrib);
-            if plane3.modifier != MOD_INVALID {
-                attribs.push(EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT as egl::Attrib);
-                attribs.push((plane3.modifier & 0xFFFFFFFF) as egl::Attrib);
-                attribs.push(EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT as egl::Attrib);
-                attribs.push((plane3.modifier >> 32) as egl::Attrib);
-            }
-        }
-
-        attribs.push(egl::NONE as egl::Attrib);
-
-        self.import_dmabuf_texture_from_attribs(id, &attribs)
-    }
-
-    fn import_dmabuf_texture_from_attribs(
-        &mut self,
-        id: u64,
-        attribs: &[egl::Attrib],
-    ) -> Option<glow::Texture> {
-        log::debug!("[gpu] DMA-BUF import attribs for id={}: {:?}", id, attribs);
-
-        let image = unsafe {
-            let no_context = egl::Context::from_ptr(std::ptr::null_mut());
-            let no_buffer = egl::ClientBuffer::from_ptr(std::ptr::null_mut());
-            match self.egl.create_image(
-                self.display,
-                no_context,
-                EGL_LINUX_DMA_BUF_EXT,
-                no_buffer,
-                attribs,
-            ) {
-                Ok(img) => img,
-                Err(e) => {
-                    let egl_error = self.egl.get_error();
-                    log::warn!(
-                        "[gpu] Failed to create EGL image from DMA-BUF: {:?} (EGL error: {:?})",
-                        e,
-                        egl_error
-                    );
-                    return None;
-                }
-            }
-        };
-
-        type GlEglImageTargetTexture2DOesFn = unsafe extern "C" fn(u32, *const std::ffi::c_void);
-        let gl_image_target: Option<GlEglImageTargetTexture2DOesFn> = self
-            .egl
-            .get_proc_address("glEGLImageTargetTexture2DOES")
-            .map(|p| unsafe { std::mem::transmute(p) });
-
-        let gl_image_target = match gl_image_target {
-            Some(f) => f,
-            None => {
-                log::warn!("[gpu] glEGLImageTargetTexture2DOES not available");
-                self.egl.destroy_image(self.display, image).ok();
-                return None;
-            }
-        };
-
-        // try GL_TEXTURE_2D first - this is a hacky workaround for firefox
-        let (texture, is_external) = unsafe {
-            let tex = self.gl.create_texture().ok()?;
-
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::LINEAR as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::LINEAR as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-
-            while self.gl.get_error() != glow::NO_ERROR {}
-
-            gl_image_target(glow::TEXTURE_2D, image.as_ptr());
-
-            let gl_error = self.gl.get_error();
-            if gl_error == glow::NO_ERROR {
-                log::debug!("[gpu] DMA-BUF imported as GL_TEXTURE_2D (id={})", id);
-                (tex, false)
-            } else {
-                log::debug!(
-                    "[gpu] GL_TEXTURE_2D failed ({:#x}), trying GL_TEXTURE_EXTERNAL_OES",
-                    gl_error
-                );
-
-                self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(tex));
-                self.gl.tex_parameter_i32(
-                    GL_TEXTURE_EXTERNAL_OES,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::LINEAR as i32,
-                );
-                self.gl.tex_parameter_i32(
-                    GL_TEXTURE_EXTERNAL_OES,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::LINEAR as i32,
-                );
-                self.gl.tex_parameter_i32(
-                    GL_TEXTURE_EXTERNAL_OES,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                self.gl.tex_parameter_i32(
-                    GL_TEXTURE_EXTERNAL_OES,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-
-                while self.gl.get_error() != glow::NO_ERROR {}
-
-                gl_image_target(GL_TEXTURE_EXTERNAL_OES, image.as_ptr());
-
-                let gl_error = self.gl.get_error();
-                if gl_error != glow::NO_ERROR {
-                    log::warn!("[gpu] GL_TEXTURE_EXTERNAL_OES also failed: {:#x}", gl_error);
-                    self.gl.delete_texture(tex);
-                    self.egl.destroy_image(self.display, image).ok();
-                    return None;
-                }
-
-                log::debug!(
-                    "[gpu] DMA-BUF imported as GL_TEXTURE_EXTERNAL_OES (id={})",
-                    id
-                );
-                (tex, true)
-            }
-        };
-
-        log::debug!(
-            "[gpu] Successfully imported DMA-BUF texture id={} (external={})",
-            id,
-            is_external
-        );
-        self.dmabuf_textures
-            .insert(id, (texture, image, is_external));
-        Some(texture)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_dmabuf_texture(&self, id: u64) -> Option<glow::Texture> {
-        self.dmabuf_textures.get(&id).map(|(tex, _, _)| *tex)
-    }
-
-    pub fn is_dmabuf_external(&self, id: u64) -> bool {
-        self.dmabuf_textures
-            .get(&id)
-            .map(|(_, _, is_external)| *is_external)
-            .unwrap_or(true)
-    }
-
-    pub fn draw_texture(&self, texture: glow::Texture, x: i32, y: i32, width: i32, height: i32) {
-        unsafe {
-            self.gl.enable(glow::BLEND);
-            self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-
-            self.gl.use_program(Some(self.texture_program));
-
-            let offset_loc = self
-                .gl
-                .get_uniform_location(self.texture_program, "u_offset");
-            let size_loc = self.gl.get_uniform_location(self.texture_program, "u_size");
-            let screen_loc = self
-                .gl
-                .get_uniform_location(self.texture_program, "u_screen_size");
-            let tex_loc = self
-                .gl
-                .get_uniform_location(self.texture_program, "u_texture");
-
-            self.gl
-                .uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
-            self.gl
-                .uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
-            self.gl
-                .uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
-            self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
-
-            self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-
-            self.gl.bind_vertex_array(Some(self.quad_vao));
-            self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
-
-            self.gl.disable(glow::BLEND);
-        }
-    }
-
-    pub fn draw_dmabuf_texture(
-        &self,
-        texture: glow::Texture,
+        texture: GlesTexture,
         x: i32,
         y: i32,
         width: i32,
         height: i32,
-        is_external: bool,
     ) {
-        if is_external {
-            let program = match self.external_program {
-                Some(p) => p,
-                None => {
-                    log::warn!("[gpu] Cannot draw external DMA-BUF texture: external program not available");
-                    return;
-                }
-            };
+        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
+        let output_size = Size::from((self.width as i32, self.height as i32));
 
-            unsafe {
-                self.gl.enable(glow::BLEND);
-                self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-
-                self.gl.use_program(Some(program));
-
-                let offset_loc = self.gl.get_uniform_location(program, "u_offset");
-                let size_loc = self.gl.get_uniform_location(program, "u_size");
-                let screen_loc = self.gl.get_uniform_location(program, "u_screen_size");
-                let tex_loc = self.gl.get_uniform_location(program, "u_texture");
-
-                self.gl
-                    .uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
-                self.gl
-                    .uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
-                self.gl
-                    .uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
-                self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
-
-                self.gl.active_texture(glow::TEXTURE0);
-                self.gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(texture));
-
-                self.gl.bind_vertex_array(Some(self.quad_vao));
-                self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
-
-                let gl_error = self.gl.get_error();
-                if gl_error != glow::NO_ERROR {
-                    log::warn!(
-                        "[gpu] GL error after drawing external DMA-BUF texture: {:#x}",
-                        gl_error
-                    );
-                }
-
-                self.gl.disable(glow::BLEND);
-            }
-        } else {
-            unsafe {
-                self.gl.enable(glow::BLEND);
-                self.gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-
-                self.gl.use_program(Some(self.dmabuf_program));
-
-                let offset_loc = self
-                    .gl
-                    .get_uniform_location(self.dmabuf_program, "u_offset");
-                let size_loc = self.gl.get_uniform_location(self.dmabuf_program, "u_size");
-                let screen_loc = self
-                    .gl
-                    .get_uniform_location(self.dmabuf_program, "u_screen_size");
-                let tex_loc = self
-                    .gl
-                    .get_uniform_location(self.dmabuf_program, "u_texture");
-
-                self.gl
-                    .uniform_2_f32(offset_loc.as_ref(), x as f32, y as f32);
-                self.gl
-                    .uniform_2_f32(size_loc.as_ref(), width as f32, height as f32);
-                self.gl
-                    .uniform_2_f32(screen_loc.as_ref(), self.width as f32, self.height as f32);
-                self.gl.uniform_1_i32(tex_loc.as_ref(), 0);
-
-                self.gl.active_texture(glow::TEXTURE0);
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-
-                self.gl.bind_vertex_array(Some(self.quad_vao));
-                self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
-
-                let gl_error = self.gl.get_error();
-                if gl_error != glow::NO_ERROR {
-                    log::warn!(
-                        "[gpu] GL error after drawing DMA-BUF texture: {:#x}",
-                        gl_error
-                    );
-                }
-
-                self.gl.disable(glow::BLEND);
+        if let Ok(mut target) = self.renderer.bind(dmabuf) {
+            if let Ok(mut frame) = self.renderer.render(&mut target, output_size, Transform::Normal) {
+                let tex_size = texture.size();
+                let src = Rectangle::new(
+                    Point::from((0.0, 0.0)),
+                    Size::from((tex_size.w as f64, tex_size.h as f64)),
+                );
+                
+                let dst = Rectangle::new(
+                    Point::from((x, y)),
+                    Size::from((width, height)),
+                );
+                
+                let damage = [dst];
+                
+                let opaque_regions: [Rectangle<i32, smithay::utils::Physical>; 0] = [];
+                
+                let _ = frame.render_texture_from_to(
+                    &texture,
+                    src,
+                    dst,
+                    &damage,
+                    &opaque_regions,
+                    Transform::Normal,
+                    1.0,
+                    None,
+                    &[],
+                );
+                
+                let _ = frame.finish();
             }
         }
     }
 
+    pub fn draw_dmabuf_texture(
+        &mut self,
+        texture: GlesTexture,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        _is_external: bool,
+    ) {
+        self.draw_texture(texture, x, y, width, height);
+    }
+
     pub fn draw_cursor(&mut self, x: i32, y: i32) {
-        // W = white, B = black outline, . = transparent
         const CURSOR: &[&str] = &[
             "BW",
             "BWWB",
@@ -1444,49 +630,40 @@ impl GpuRenderer {
         let cursor_id = u64::MAX - 1;
 
         if !self.shm_textures.contains_key(&cursor_id) {
-            let mut pixels = vec![0u32; CURSOR_W * CURSOR_H];
+            let mut pixels = vec![0u8; CURSOR_W * CURSOR_H * 4];
 
             for (dy, row) in CURSOR.iter().enumerate() {
                 for (dx, ch) in row.chars().enumerate() {
-                    let color = match ch {
-                        'W' => 0xFFFFFFFF,
-                        'B' => 0xFF000000,
-                        _ => 0x00000000,
+                    let (r, g, b, a) = match ch {
+                        'W' => (255, 255, 255, 255),
+                        'B' => (0, 0, 0, 255),
+                        _ => (0, 0, 0, 0),
                     };
-                    pixels[dy * CURSOR_W + dx] = color;
+                    let idx = (dy * CURSOR_W + dx) * 4;
+                    pixels[idx] = b;
+                    pixels[idx + 1] = g;
+                    pixels[idx + 2] = r;
+                    pixels[idx + 3] = a;
                 }
             }
-
-            let data: &[u8] = unsafe {
-                std::slice::from_raw_parts(pixels.as_ptr() as *const u8, pixels.len() * 4)
-            };
 
             self.upload_shm_texture(
                 cursor_id,
                 CURSOR_W as u32,
                 CURSOR_H as u32,
                 (CURSOR_W * 4) as u32,
-                data,
+                &pixels,
             );
         }
 
-        if let Some(&texture) = self.shm_textures.get(&cursor_id) {
-            self.draw_texture(texture, x, y, CURSOR_W as i32, CURSOR_H as i32);
+        if let Some(texture) = self.shm_textures.get(&cursor_id) {
+            self.draw_texture(texture.clone(), x, y, CURSOR_W as i32, CURSOR_H as i32);
         }
     }
 
     pub fn remove_texture(&mut self, id: u64) {
-        if let Some(tex) = self.shm_textures.remove(&id) {
-            unsafe {
-                self.gl.delete_texture(tex);
-            }
-        }
-        if let Some((tex, img, _)) = self.dmabuf_textures.remove(&id) {
-            unsafe {
-                self.gl.delete_texture(tex);
-                self.egl.destroy_image(self.display, img).ok();
-            }
-        }
+        self.shm_textures.remove(&id);
+        self.dmabuf_textures.remove(&id);
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -1498,7 +675,7 @@ impl GpuRenderer {
     }
 
     pub fn drm_fd(&self) -> BorrowedFd<'_> {
-        self.drm_card.as_fd()
+        self.drm_device.as_fd()
     }
 
     pub fn is_flip_pending(&self) -> bool {
@@ -1510,31 +687,19 @@ impl GpuRenderer {
             return false;
         }
 
-        use std::os::fd::AsRawFd;
-        let fd = self.drm_card.as_fd().as_raw_fd();
+        let mut fds = [libc::pollfd {
+            fd: self.drm_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }];
 
         unsafe {
-            let mut fds = [libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            }];
-
             let ret = libc::poll(fds.as_mut_ptr(), 1, 0);
             if ret > 0 && (fds[0].revents & libc::POLLIN) != 0 {
                 let mut buf = [0u8; 1024];
-                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+                libc::read(self.drm_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
 
-                let gbm_surface = self.gbm_surface as *mut gbm_sys::gbm_surface;
-                if let Some(old_fb) = self.current_fb.take() {
-                    self.drm_card.destroy_framebuffer(old_fb).ok();
-                }
-                if !self.current_bo.is_null() {
-                    gbm_sys::gbm_surface_release_buffer(gbm_surface, self.current_bo);
-                }
-                self.current_fb = self.next_fb.take();
-                self.current_bo = self.next_bo;
-                self.next_bo = std::ptr::null_mut();
+                self.current_fb = self.pending_fb.take();
                 self.flip_pending = false;
 
                 return true;
@@ -1544,12 +709,9 @@ impl GpuRenderer {
     }
 
     pub fn drm_dev(&self) -> u64 {
-        use std::os::fd::AsRawFd;
-
-        let fd = self.drm_card.as_fd().as_raw_fd();
         unsafe {
             let mut stat: libc::stat = std::mem::zeroed();
-            if libc::fstat(fd, &mut stat) == 0 {
+            if libc::fstat(self.drm_fd, &mut stat) == 0 {
                 stat.st_rdev
             } else {
                 0
@@ -1582,86 +744,15 @@ impl GpuRenderer {
         card_dev
     }
 
-    pub fn read_pixels(&self, x: i32, y: i32, width: i32, height: i32) -> Vec<u32> {
-        let mut pixels = vec![0u32; (width * height) as usize];
-        unsafe {
-            self.gl.read_pixels(
-                x,
-                (self.height as i32) - y - height,
-                width,
-                height,
-                glow::BGRA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(std::slice::from_raw_parts_mut(
-                    pixels.as_mut_ptr() as *mut u8,
-                    pixels.len() * 4,
-                ))),
-            );
-        }
-
-        let mut flipped = vec![0u32; pixels.len()];
-        for row in 0..height as usize {
-            let src_row = (height as usize - 1 - row) * width as usize;
-            let dst_row = row * width as usize;
-            flipped[dst_row..dst_row + width as usize]
-                .copy_from_slice(&pixels[src_row..src_row + width as usize]);
-        }
-        flipped
+    pub fn read_pixels(&self, _x: i32, _y: i32, width: i32, height: i32) -> Vec<u32> {
+        // TODO: implement using Smithay's ExportMem trait
+        vec![0u32; (width * height) as usize]
     }
-}
 
-impl Drop for GpuRenderer {
-    fn drop(&mut self) {
-        for (_, tex) in self.shm_textures.drain() {
-            unsafe {
-                self.gl.delete_texture(tex);
-            }
-        }
-        for (_, (tex, img, _)) in self.dmabuf_textures.drain() {
-            unsafe {
-                self.gl.delete_texture(tex);
-                self.egl.destroy_image(self.display, img).ok();
-            }
-        }
-
-        unsafe {
-            self.gl.delete_program(self.texture_program);
-            if let Some(external) = self.external_program {
-                self.gl.delete_program(external);
-            }
-            self.gl.delete_program(self.dmabuf_program);
-            self.gl.delete_program(self.color_program);
-            self.gl.delete_vertex_array(self.quad_vao);
-            self.gl.delete_buffer(self.quad_vbo);
-        }
-
-        self.egl.destroy_surface(self.display, self.surface).ok();
-        self.egl.destroy_context(self.display, self.context).ok();
-        self.egl.terminate(self.display).ok();
+    pub fn texture_count(&self) -> usize {
+        self.shm_textures.len() + self.dmabuf_textures.len()
     }
-}
 
-fn bytemuck_cast_slice(data: &[f32]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) }
-}
-
-pub struct ProfilerStats {
-    pub fps: f32,
-    pub frame_time_ms: f32,
-    pub render_time_us: u64,
-    pub input_time_us: u64,
-    pub memory_mb: f32,
-    pub window_count: usize,
-    pub texture_count: usize,
-}
-
-const FONT_DATA: &[u8] = include_bytes!("font5x7.raw");
-const FONT_CHAR_WIDTH: usize = 5;
-const FONT_CHAR_HEIGHT: usize = 7;
-const FONT_CHARS_PER_ROW: usize = 16;
-const PROFILER_TEXTURE_ID: u64 = u64::MAX - 1;
-
-impl GpuRenderer {
     pub fn draw_profiler(&mut self, stats: &ProfilerStats) {
         let lines = [
             format!("FPS: {:.1}", stats.fps),
@@ -1699,7 +790,14 @@ impl GpuRenderer {
             }
         }
 
-        let texture = self.upload_profiler_texture(box_width as u32, box_height as u32, &pixels);
+        let profiler_id = u64::MAX - 2;
+        let texture = self.upload_shm_texture(
+            profiler_id,
+            box_width as u32,
+            box_height as u32,
+            (box_width * 4) as u32,
+            &pixels,
+        );
 
         let box_x = self.width as i32 - box_width as i32 - 10;
         let box_y = 10;
@@ -1748,56 +846,56 @@ impl GpuRenderer {
             }
         }
     }
+}
 
-    fn upload_profiler_texture(&mut self, width: u32, height: u32, data: &[u8]) -> glow::Texture {
-        unsafe {
-            let texture = if let Some(&tex) = self.shm_textures.get(&PROFILER_TEXTURE_ID) {
-                tex
-            } else {
-                let tex = self.gl.create_texture().unwrap();
-                self.shm_textures.insert(PROFILER_TEXTURE_ID, tex);
-                tex
-            };
+struct DrmBuffer {
+    handle: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+}
 
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
+impl drm::buffer::Buffer for DrmBuffer {
+    fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+    fn format(&self) -> drm::buffer::DrmFourcc {
+        drm::buffer::DrmFourcc::Xrgb8888
+    }
+    fn pitch(&self) -> u32 {
+        self.stride
+    }
+    fn handle(&self) -> drm::buffer::Handle {
+        drm::buffer::Handle::from(std::num::NonZeroU32::new(self.handle).unwrap())
+    }
+}
 
-            self.gl.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                glow::RGBA as i32,
-                width as i32,
-                height as i32,
-                0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(data)),
-            );
+impl Drop for GpuRenderer {
+    fn drop(&mut self) {
+        self.shm_textures.clear();
+        self.dmabuf_textures.clear();
 
-            texture
+        if let Ok(card) = self.drm_device.try_clone().map(DrmCard) {
+            for buffer in &self.render_buffers {
+                if let Some(fb) = buffer.fb {
+                    card.destroy_framebuffer(fb).ok();
+                }
+            }
         }
     }
+}
 
-    pub fn texture_count(&self) -> usize {
-        self.shm_textures.len() + self.dmabuf_textures.len()
-    }
+const FONT_DATA: &[u8] = include_bytes!("font5x7.raw");
+const FONT_CHAR_WIDTH: usize = 5;
+const FONT_CHAR_HEIGHT: usize = 7;
+const FONT_CHARS_PER_ROW: usize = 16;
+
+pub struct ProfilerStats {
+    pub fps: f32,
+    pub frame_time_ms: f32,
+    pub render_time_us: u64,
+    pub input_time_us: u64,
+    pub memory_mb: f32,
+    pub window_count: usize,
+    pub texture_count: usize,
 }
