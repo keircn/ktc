@@ -232,8 +232,12 @@ fn run(config: Config) {
         .insert_source(
             calloop::generic::Generic::new(poll_fd, calloop::Interest::READ, calloop::Mode::Level),
             |_, _, data| {
-                data.display.dispatch_clients(&mut data.state).ok();
-                data.display.flush_clients().ok();
+                if let Err(e) = data.display.dispatch_clients(&mut data.state) {
+                    log::warn!("[wayland] dispatch_clients error: {:?}", e);
+                }
+                if let Err(e) = data.display.flush_clients() {
+                    log::warn!("[wayland] flush_clients error: {:?}", e);
+                }
                 Ok(calloop::PostAction::Continue)
             },
         )

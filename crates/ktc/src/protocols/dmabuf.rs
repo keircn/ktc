@@ -110,10 +110,12 @@ impl Dispatch<ZwpLinuxDmabufV1, ()> for State {
             }
             zwp_linux_dmabuf_v1::Request::Destroy => {}
             zwp_linux_dmabuf_v1::Request::GetDefaultFeedback { id } => {
+                log::debug!("[dmabuf] GetDefaultFeedback requested");
                 let feedback = data_init.init(id, DmaBufFeedbackData { for_surface: false });
                 send_feedback_events(state, &feedback);
             }
-            zwp_linux_dmabuf_v1::Request::GetSurfaceFeedback { id, .. } => {
+            zwp_linux_dmabuf_v1::Request::GetSurfaceFeedback { id, surface } => {
+                log::debug!("[dmabuf] GetSurfaceFeedback requested for surface {:?}", surface.id());
                 let feedback = data_init.init(id, DmaBufFeedbackData { for_surface: true });
                 send_feedback_events(state, &feedback);
             }
@@ -139,6 +141,11 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
     };
 
     let table_size = formats.len() * std::mem::size_of::<FormatModifierEntry>();
+    log::debug!(
+        "[dmabuf] Sending feedback: {} formats, table_size={}",
+        formats.len(),
+        table_size
+    );
 
     let fd = match create_format_table_fd(&formats) {
         Ok(fd) => fd,
@@ -171,6 +178,12 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
         (render_dev, card_dev)
     };
 
+    log::debug!(
+        "[dmabuf] Feedback devices: main_dev={} scanout_dev={}",
+        main_dev,
+        scanout_dev
+    );
+
     let main_dev_bytes = main_dev.to_ne_bytes();
     feedback.main_device(main_dev_bytes.to_vec());
 
@@ -185,6 +198,7 @@ fn send_feedback_events(state: &State, feedback: &ZwpLinuxDmabufFeedbackV1) {
 
     feedback.tranche_done();
     feedback.done();
+    log::debug!("[dmabuf] Feedback sent successfully");
 }
 
 fn create_format_table_fd(
