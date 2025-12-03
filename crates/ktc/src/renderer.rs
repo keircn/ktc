@@ -22,6 +22,24 @@ pub struct DmaBufFormat {
     pub modifier: u64,
 }
 
+enum RenderCommand {
+    Clear {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        color: [f32; 4],
+    },
+    Texture {
+        texture_id: u64,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        is_dmabuf: bool,
+    },
+}
+
 pub struct GpuRenderer {
     renderer: GlesRenderer,
     #[allow(dead_code)]
@@ -45,6 +63,7 @@ pub struct GpuRenderer {
     current_fb: Option<framebuffer::Handle>,
     shm_textures: HashMap<u64, GlesTexture>,
     dmabuf_textures: HashMap<u64, GlesTexture>,
+    render_commands: Vec<RenderCommand>,
     pub supported_formats: Vec<DmaBufFormat>,
 }
 
@@ -205,6 +224,7 @@ impl GpuRenderer {
             current_fb: None,
             shm_textures: HashMap::new(),
             dmabuf_textures: HashMap::new(),
+            render_commands: Vec::with_capacity(64),
             supported_formats,
         })
     }
@@ -307,16 +327,7 @@ impl GpuRenderer {
             self.current_fb = self.pending_fb.take();
         }
 
-        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
-        let size = Size::from((self.width as i32, self.height as i32));
-        
-        if let Ok(mut target) = self.renderer.bind(dmabuf) {
-            if let Ok(mut frame) = self.renderer.render(&mut target, size, Transform::Normal) {
-                let clear_rect = Rectangle::new(Point::from((0, 0)), size);
-                let _ = frame.clear(Color32F::new(0.1, 0.1, 0.12, 1.0), &[clear_rect]);
-                let _ = frame.finish();
-            }
-        }
+        self.render_commands.clear();
     }
 
     pub fn end_frame(&mut self) {
@@ -327,6 +338,60 @@ impl GpuRenderer {
                 return;
             }
         };
+
+        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
+        let output_size = Size::from((self.width as i32, self.height as i32));
+
+        if let Ok(mut target) = self.renderer.bind(dmabuf) {
+            if let Ok(mut frame) = self.renderer.render(&mut target, output_size, Transform::Normal) {
+                for cmd in &self.render_commands {
+                    match cmd {
+                        RenderCommand::Clear { x, y, width, height, color } => {
+                            let rect = Rectangle::new(
+                                Point::from((*x, *y)),
+                                Size::from((*width, *height)),
+                            );
+                            let _ = frame.clear(Color32F::from(*color), &[rect]);
+                        }
+                        RenderCommand::Texture { texture_id, x, y, width, height, is_dmabuf } => {
+                            let texture = if *is_dmabuf {
+                                self.dmabuf_textures.get(texture_id)
+                            } else {
+                                self.shm_textures.get(texture_id)
+                            };
+                            
+                            if let Some(texture) = texture {
+                                let tex_size = texture.size();
+                                let src = Rectangle::new(
+                                    Point::from((0.0, 0.0)),
+                                    Size::from((tex_size.w as f64, tex_size.h as f64)),
+                                );
+                                let dst = Rectangle::new(
+                                    Point::from((*x, *y)),
+                                    Size::from((*width, *height)),
+                                );
+                                let damage = [dst];
+                                let opaque_regions: [Rectangle<i32, smithay::utils::Physical>; 0] = [];
+                                
+                                let _ = frame.render_texture_from_to(
+                                    texture,
+                                    src,
+                                    dst,
+                                    &damage,
+                                    &opaque_regions,
+                                    Transform::Normal,
+                                    1.0,
+                                    None,
+                                    &[],
+                                );
+                            }
+                        }
+                    }
+                }
+                
+                let _ = frame.finish();
+            }
+        }
 
         let card = match self.drm_device.try_clone().map(DrmCard) {
             Ok(c) => c,
@@ -396,19 +461,13 @@ impl GpuRenderer {
     }
 
     pub fn draw_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: [f32; 4]) {
-        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
-        let output_size = Size::from((self.width as i32, self.height as i32));
-
-        if let Ok(mut target) = self.renderer.bind(dmabuf) {
-            if let Ok(mut frame) = self.renderer.render(&mut target, output_size, Transform::Normal) {
-                let rect = Rectangle::new(
-                    Point::from((x, y)),
-                    Size::from((width, height)),
-                );
-                let _ = frame.clear(Color32F::from(color), &[rect]);
-                let _ = frame.finish();
-            }
-        }
+        self.render_commands.push(RenderCommand::Clear {
+            x,
+            y,
+            width,
+            height,
+            color,
+        });
     }
 
     pub fn upload_shm_texture(
@@ -552,40 +611,33 @@ impl GpuRenderer {
         width: i32,
         height: i32,
     ) {
-        let dmabuf = &mut self.render_buffers[self.current_buffer].dmabuf;
-        let output_size = Size::from((self.width as i32, self.height as i32));
-
-        if let Ok(mut target) = self.renderer.bind(dmabuf) {
-            if let Ok(mut frame) = self.renderer.render(&mut target, output_size, Transform::Normal) {
-                let tex_size = texture.size();
-                let src = Rectangle::new(
-                    Point::from((0.0, 0.0)),
-                    Size::from((tex_size.w as f64, tex_size.h as f64)),
-                );
-                
-                let dst = Rectangle::new(
-                    Point::from((x, y)),
-                    Size::from((width, height)),
-                );
-                
-                let damage = [dst];
-                
-                let opaque_regions: [Rectangle<i32, smithay::utils::Physical>; 0] = [];
-                
-                let _ = frame.render_texture_from_to(
-                    &texture,
-                    src,
-                    dst,
-                    &damage,
-                    &opaque_regions,
-                    Transform::Normal,
-                    1.0,
-                    None,
-                    &[],
-                );
-                
-                let _ = frame.finish();
-            }
+        let texture_id = self.shm_textures.iter()
+            .find(|(_, tex)| std::ptr::eq(*tex as *const _, &texture as *const _))
+            .map(|(id, _)| *id);
+        
+        if let Some(id) = texture_id {
+            self.render_commands.push(RenderCommand::Texture {
+                texture_id: id,
+                x,
+                y,
+                width,
+                height,
+                is_dmabuf: false,
+            });
+        } else {
+            // TODO this is technically not best practice
+            // and probably inefficient, ill address it
+            // later probably if i remember
+            let temp_id = u64::MAX - 100 - self.render_commands.len() as u64;
+            self.shm_textures.insert(temp_id, texture);
+            self.render_commands.push(RenderCommand::Texture {
+                texture_id: temp_id,
+                x,
+                y,
+                width,
+                height,
+                is_dmabuf: false,
+            });
         }
     }
 
@@ -598,7 +650,31 @@ impl GpuRenderer {
         height: i32,
         _is_external: bool,
     ) {
-        self.draw_texture(texture, x, y, width, height);
+        let texture_id = self.dmabuf_textures.iter()
+            .find(|(_, tex)| std::ptr::eq(*tex as *const _, &texture as *const _))
+            .map(|(id, _)| *id);
+        
+        if let Some(id) = texture_id {
+            self.render_commands.push(RenderCommand::Texture {
+                texture_id: id,
+                x,
+                y,
+                width,
+                height,
+                is_dmabuf: true,
+            });
+        } else {
+            let temp_id = u64::MAX - 200 - self.render_commands.len() as u64;
+            self.dmabuf_textures.insert(temp_id, texture);
+            self.render_commands.push(RenderCommand::Texture {
+                texture_id: temp_id,
+                x,
+                y,
+                width,
+                height,
+                is_dmabuf: true,
+            });
+        }
     }
 
     pub fn draw_cursor(&mut self, x: i32, y: i32) {
@@ -656,9 +732,14 @@ impl GpuRenderer {
             );
         }
 
-        if let Some(texture) = self.shm_textures.get(&cursor_id) {
-            self.draw_texture(texture.clone(), x, y, CURSOR_W as i32, CURSOR_H as i32);
-        }
+        self.render_commands.push(RenderCommand::Texture {
+            texture_id: cursor_id,
+            x,
+            y,
+            width: CURSOR_W as i32,
+            height: CURSOR_H as i32,
+            is_dmabuf: false,
+        });
     }
 
     pub fn remove_texture(&mut self, id: u64) {
@@ -745,7 +826,7 @@ impl GpuRenderer {
     }
 
     pub fn read_pixels(&self, _x: i32, _y: i32, width: i32, height: i32) -> Vec<u32> {
-        // TODO: implement using Smithay's ExportMem trait
+        // TODO: implement using ExportMem (low priority)
         vec![0u32; (width * height) as usize]
     }
 
@@ -791,7 +872,7 @@ impl GpuRenderer {
         }
 
         let profiler_id = u64::MAX - 2;
-        let texture = self.upload_shm_texture(
+        self.upload_shm_texture(
             profiler_id,
             box_width as u32,
             box_height as u32,
@@ -802,7 +883,14 @@ impl GpuRenderer {
         let box_x = self.width as i32 - box_width as i32 - 10;
         let box_y = 10;
 
-        self.draw_texture(texture, box_x, box_y, box_width as i32, box_height as i32);
+        self.render_commands.push(RenderCommand::Texture {
+            texture_id: profiler_id,
+            x: box_x,
+            y: box_y,
+            width: box_width as i32,
+            height: box_height as i32,
+            is_dmabuf: false,
+        });
     }
 
     fn draw_char_to_buffer(
