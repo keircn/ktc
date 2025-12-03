@@ -1009,6 +1009,16 @@ impl GpuRenderer {
         self.import_dmabuf_texture_from_attribs(id, &attribs)
     }
 
+    pub fn is_format_supported(&self, format: u32, modifier: u64) -> bool {
+        const MOD_INVALID: u64 = 0x00ffffffffffffff;
+        self.supported_formats.iter().any(|f| {
+            f.format == format
+                && (f.modifier == modifier
+                    || modifier == MOD_INVALID
+                    || f.modifier == MOD_INVALID)
+        })
+    }
+
     pub fn import_dmabuf_texture_multiplane(
         &mut self,
         id: u64,
@@ -1028,8 +1038,18 @@ impl GpuRenderer {
 
         let plane0 = &planes[0];
         let fd0 = plane0.fd.as_raw_fd();
-        log::info!("[gpu] Creating new DMA-BUF texture: id={} fd={} {}x{} format={:#x} planes={} modifier={:#x}",
-            id, fd0, width, height, format, planes.len(), plane0.modifier);
+
+        let is_supported = self.is_format_supported(format, plane0.modifier);
+        log::info!("[gpu] Creating new DMA-BUF texture: id={} fd={} {}x{} format={:#x} planes={} modifier={:#x} supported={}",
+            id, fd0, width, height, format, planes.len(), plane0.modifier, is_supported);
+
+        if !is_supported {
+            log::warn!(
+                "[gpu] Format {:#x} with modifier {:#x} not in supported formats list",
+                format,
+                plane0.modifier
+            );
+        }
 
         let mut attribs: Vec<egl::Attrib> = vec![
             egl::WIDTH as egl::Attrib,
@@ -1116,6 +1136,8 @@ impl GpuRenderer {
         id: u64,
         attribs: &[egl::Attrib],
     ) -> Option<glow::Texture> {
+        log::debug!("[gpu] DMA-BUF import attribs for id={}: {:?}", id, attribs);
+
         let image = unsafe {
             let no_context = egl::Context::from_ptr(std::ptr::null_mut());
             let no_buffer = egl::ClientBuffer::from_ptr(std::ptr::null_mut());
@@ -1128,7 +1150,12 @@ impl GpuRenderer {
             ) {
                 Ok(img) => img,
                 Err(e) => {
-                    log::warn!("[gpu] Failed to create EGL image from DMA-BUF: {:?}", e);
+                    let egl_error = self.egl.get_error();
+                    log::warn!(
+                        "[gpu] Failed to create EGL image from DMA-BUF: {:?} (EGL error: {:?})",
+                        e,
+                        egl_error
+                    );
                     return None;
                 }
             }
