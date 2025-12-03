@@ -1009,6 +1009,10 @@ fn render_gpu(
                         let draw_width = geom.width;
                         let draw_height =
                             geom.height - if *is_fullscreen { 0 } else { title_bar_height };
+                        log::debug!(
+                            "[render] Drawing DMA-BUF texture for window {}: {}x{} at ({},{}) external={}",
+                            id, draw_width, draw_height, geom.x, content_y, is_external
+                        );
                         gpu.draw_dmabuf_texture(
                             texture,
                             geom.x,
@@ -1112,6 +1116,7 @@ fn render_gpu(
                 win.needs_redraw = false;
                 if !win.buffer_released {
                     if let Some(ref buffer) = win.buffer {
+                        log::debug!("[render] Releasing buffer {:?} for window {}", buffer.id(), id);
                         buffer.release();
                         win.buffer_released = true;
                     }
@@ -1134,6 +1139,7 @@ fn render_gpu(
             .unwrap()
             .as_millis() as u32;
 
+        log::debug!("[render] Sending {} frame callbacks at time {}", state.frame_callbacks.len(), time);
         for callback in state.frame_callbacks.drain(..) {
             callback.done(time);
         }
