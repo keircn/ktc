@@ -29,6 +29,58 @@ use wayland_server::protocol::{
 };
 use wayland_server::{Display, ListeningSocket, Resource};
 
+fn check_groups() {
+    unsafe {
+        let ngroups = libc::getgroups(0, std::ptr::null_mut());
+        if ngroups < 0 {
+            eprintln!("Failed to get groups");
+            std::process::exit(1);
+        }
+
+        let mut groups = vec![0 as libc::gid_t; ngroups as usize];
+        let res = libc::getgroups(ngroups, groups.as_mut_ptr());
+        if res < 0 {
+            eprintln!("Failed to get groups");
+            std::process::exit(1);
+        }
+
+        let egid = libc::getegid();
+        if !groups.contains(&egid) {
+            groups.push(egid);
+        }
+
+        let mut has_input = false;
+        let mut has_video = false;
+
+        for &gid in &groups {
+            let grp = libc::getgrgid(gid);
+            if !grp.is_null() {
+                let name_cstr = std::ffi::CStr::from_ptr((*grp).gr_name);
+                if let Ok(name) = name_cstr.to_str() {
+                    if name == "input" {
+                        has_input = true;
+                    } else if name == "video" {
+                        has_video = true;
+                    }
+                }
+            }
+        }
+
+        if !has_input || !has_video {
+            eprintln!("Error: User is missing required groups.");
+            if !has_input {
+                eprintln!("  - Missing 'input' group (needed for keyboard/mouse)");
+            }
+            if !has_video {
+                eprintln!("  - Missing 'video' group (needed for display output)");
+            }
+            eprintln!("Please run: sudo usermod -aG video,input $USER");
+            eprintln!("Then log out and log back in.");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     if unsafe { libc::geteuid() } == 0 {
         eprintln!("Error: KTC must not be run as root");
@@ -37,6 +89,8 @@ fn main() {
         eprintln!("Then log out and back in.");
         std::process::exit(1);
     }
+
+    check_groups();
 
     logging::FileLogger::init().expect("Failed to initialize logging");
 
